@@ -52,7 +52,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json');
+  const response = await fetch('data/denison-2026-2027.json?v=20261014-2');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
