@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore Denison University general education, major, minor, and course requirements for the 2026–2027 catalog.">
+  <title>Denison Pathways</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,650&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#">Denison <span>Pathways</span></a>
+    <span class="catalog-pill">2026–27 catalog</span>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Plan with the whole picture</p>
+        <h1>See what every course can do for your degree.</h1>
+        <p class="lede">Search Denison’s catalog, connect classes to GE competencies and program requirements, and read the official language behind every result.</p>
+      </div>
+      <div class="hero-search">
+        <label for="globalSearch">Find a course or program</label>
+        <input id="globalSearch" type="search" placeholder="Try “BIOL 210”, “justice”, or “Economics”" autocomplete="off">
+        <p id="searchHint">Loading the catalog…</p>
+      </div>
+    </section>
+
+    <section class="stats" aria-label="Catalog coverage">
+      <article><strong id="courseCount">—</strong><span>courses indexed</span></article>
+      <article><strong id="majorCount">—</strong><span>majors</span></article>
+      <article><strong id="minorCount">—</strong><span>minors</span></article>
+      <article><strong id="programCount">—</strong><span>areas of study</span></article>
+    </section>
+
+    <nav class="tabs" aria-label="Explorer views">
+      <button class="tab active" data-view="planner">My plan</button>
+      <button class="tab" data-view="courses">Courses</button>
+      <button class="tab" data-view="programs">Majors & minors</button>
+      <button class="tab" data-view="ge">General education</button>
+    </nav>
+
+    <section id="plannerView" class="view active">
+      <div class="planner-heading">
+        <div><p class="eyebrow">Personal degree planner</p><h2>Build your path forward.</h2></div>
+        <button id="resetPlan" class="text-button">Reset plan</button>
+      </div>
+
+      <div class="planner-setup">
+        <label>Preferred major
+          <select id="plannerMajor"><option value="">Choose a major</option></select>
+        </label>
+        <label>Preferred minor
+          <input id="plannerMinor" list="plannerMinorOptions" placeholder="Type to find a minor" autocomplete="off">
+          <datalist id="plannerMinorOptions"></datalist>
+        </label>
+        <div class="save-note"><span class="save-dot"></span><span>Your plan saves in this browser</span></div>
+      </div>
+
+      <div class="planner-course-entry">
+        <div>
+          <label for="plannerCourseInput">Add a class to your four-year plan</label>
+          <input id="plannerCourseInput" list="courseOptions" placeholder="Start typing a course code or title" autocomplete="off">
+          <datalist id="courseOptions"></datalist>
+          <p id="plannerEntryMessage" class="entry-message" aria-live="polite"></p>
+        </div>
+        <label>Semester
+          <select id="plannerCourseTerm"></select>
+        </label>
+        <label>Status
+          <select id="plannerCourseStatus"><option value="planned" selected>Planned</option><option value="current">In progress</option><option value="completed">Completed</option></select>
+        </label>
+        <button id="addPlannerCourse" class="primary-button">Add course</button>
+      </div>
+
+      <section class="semester-plan-section" aria-labelledby="semesterPlanTitle">
+        <div class="semester-plan-heading"><div><p class="eyebrow">Four-year schedule</p><h3 id="semesterPlanTitle">Plan semester by semester</h3></div><p>Drag classes between semesters or use each class’s semester menu.</p></div>
+        <div id="selectedCourses" class="semester-board"></div>
+      </section>
+
+      <div class="planner-dashboard">
+        <section class="planner-progress-panel">
+          <div class="section-heading"><div><p class="eyebrow">Your progress</p><h3>Requirements coverage</h3></div><span id="coverageSummary"></span></div>
+          <div id="progressCards" class="progress-cards"></div>
+          <div id="programProgress" class="program-progress"></div>
+        </section>
+        <section class="recommendations-panel">
+          <div class="section-heading"><div><p class="eyebrow">Best next moves</p><h3>Class options</h3></div><span id="recommendationCount"></span></div>
+          <p class="recommendation-intro">Ranked by how many unmet GE and selected-program areas each class can support. Catalog inclusion does not guarantee that a class is offered next term.</p>
+          <div id="recommendations" class="recommendations"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="coursesView" class="view">
+      <aside class="filters">
+        <div class="filter-head"><h2>Filter courses</h2><button id="clearFilters">Clear</button></div>
+        <label>GE or competency
+          <select id="geFilter"><option value="">All requirements</option></select>
+        </label>
+        <label>Counts toward a program
+          <select id="programFilter"><option value="">All programs</option></select>
+        </label>
+        <label class="check"><input id="explicitOnly" type="checkbox"> Explicit catalog matches only</label>
+        <p class="filter-note">“Inferred” tags use the course subject’s academic division and should be confirmed in the class schedule.</p>
+      </aside>
+      <div class="results-panel">
+        <div class="results-head"><h2>Course explorer</h2><span id="resultCount"></span></div>
+        <div id="courseResults" class="card-list"></div>
+        <button id="showMore" class="show-more">Show more</button>
+      </div>
+    </section>
+
+    <section id="programsView" class="view">
+      <div class="program-layout">
+        <div>
+          <label class="program-select-label">Choose an area of study
+            <select id="programSelect"></select>
+          </label>
+          <div id="programSummary"></div>
+        </div>
+        <article id="programDetail" class="requirements-paper"></article>
+      </div>
+    </section>
+
+    <section id="geView" class="view">
+      <div class="ge-intro">
+        <p class="eyebrow">General Education</p>
+        <h2>Requirements at a glance</h2>
+        <p>Distribution requirements build breadth; competencies are overlays that can often be completed by the same courses.</p>
+      </div>
+      <div class="ge-columns">
+        <div><h3>Distribution</h3><div id="geSummary" class="requirement-grid"></div></div>
+        <div><h3>Competencies</h3><div id="geOverlays" class="requirement-grid"></div></div>
+      </div>
+      <article class="rule-card"><h3>Rules that change the answer</h3><ul id="geRules"></ul><a id="geSource" target="_blank" rel="noreferrer">Read the official GE catalog page ↗</a></article>
+    </section>
+
+    <section class="notice">
+      <strong>Planning aid, not an official audit.</strong>
+      <p>Requirements can depend on catalog year, placement, course pairing, concentration, transfer credit, and department approval. Confirm a plan with your advisor and the Registrar.</p>
+    </section>
+  </main>
+
+  <dialog id="courseDialog">
+    <button class="dialog-close" aria-label="Close">×</button>
+    <div id="courseDialogBody"></div>
+  </dialog>
+
+  <footer>Built from Denison University’s official 2026–2027 Academic Catalog. <span id="retrievedDate"></span></footer>
+  <script src="app.js"></script>
+</body>
+</html>
