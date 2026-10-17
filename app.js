@@ -33,15 +33,21 @@ function loadPlan() {
 
 function normalizePlanShape(value = {}) {
   return {
-    majors: [...new Set(Array.isArray(value.majors) ? value.majors.filter(Boolean) : value.major ? [value.major] : [])],
-    minors: [...new Set(Array.isArray(value.minors) ? value.minors.filter(Boolean) : value.minor ? [value.minor] : [])],
-    courses: Array.isArray(value.courses) ? value.courses : [],
+    majors: [...new Set((Array.isArray(value.majors) ? value.majors : value.major ? [value.major] : []).filter(item => typeof item === 'string' && item))],
+    minors: [...new Set((Array.isArray(value.minors) ? value.minors : value.minor ? [value.minor] : []).filter(item => typeof item === 'string' && item))],
+    courses: Array.isArray(value.courses) ? value.courses.filter(item => item && typeof item.code === 'string') : [],
     otherCredits: Math.max(0, Number(value.otherCredits) || 0),
     gpa: value.gpa === '' || value.gpa == null ? '' : Number(value.gpa)
   };
 }
 
-function savePlan() { localStorage.setItem(STORAGE_KEY, JSON.stringify(plan)); }
+function savePlan() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(plan)); }
+  catch (_) {
+    const note = typeof document !== 'undefined' && $('.save-note');
+    if (note) note.textContent = 'Browser storage is unavailable. Print your plan to keep a copy.';
+  }
+}
 
 function normalizeTerm(term) {
   return SEMESTERS.some(semester => semester.id === term) ? term : SEMESTERS[0].id;
@@ -52,7 +58,8 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261014-2');
+  const response = await fetch('data/denison-2026-2027.json?v=20261016-audit');
+  if (!response.ok) throw new Error(`Catalog request failed: ${response.status}`);
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -82,6 +89,13 @@ function majorOptions() {
   }).join('');
 }
 
+function minorChoices() {
+  return data.programs.flatMap(program => (program.slug === 'music-theatre' ? program.minorTracks.slice(0, 1) : program.minorTracks || []).map(track => ({
+    id: track.id, slug: program.slug,
+    label: track.label === 'Minor' || program.slug === 'music-theatre' ? program.name : `${program.name} — ${track.label}`
+  })));
+}
+
 function fillFilters() {
   const ge = [...data.generalEducation.summary, ...data.generalEducation.overlays, { id: 'LAB', label: 'Science laboratory' }];
   $('#geFilter').innerHTML += ge.map(requirement => `<option value="${requirement.id}">${requirement.label}</option>`).join('');
@@ -89,29 +103,107 @@ function fillFilters() {
   $('#programFilter').innerHTML += allPrograms;
   $('#programSelect').innerHTML = allPrograms;
   $('#plannerMajor').innerHTML = '<option value="">Choose a major and degree</option>' + majorOptions();
-  $('#plannerMinorOptions').innerHTML = data.programs.filter(program => program.kinds.includes('minor')).map(program => `<option value="${escapeHtml(program.name)}"></option>`).join('');
+  $('#plannerMinorOptions').innerHTML = minorChoices().map(choice => `<option value="${escapeHtml(choice.label)}"></option>`).join('');
   $('#plannerCourseTerm').innerHTML = semesterOptions(SEMESTERS[0].id);
   $('#electiveTerm').innerHTML = semesterOptions(SEMESTERS[0].id);
   const subjects = [...new Map(data.courses.map(course => [course.subject, course.subjectName])).entries()].sort((a, b) => a[0].localeCompare(b[0]));
   $('#electiveSubject').innerHTML += subjects.map(([code, name]) => `<option value="${code}">${code} · ${escapeHtml(name)}</option>`).join('');
-  plan.majors = plan.majors.map(value => value.includes('::') ? value : data.programs.find(program => program.slug === value)?.majorTracks?.[0]?.id).filter(Boolean);
-  plan.minors = plan.minors.filter(slug => data.programs.some(program => program.slug === slug && program.kinds.includes('minor')));
+  plan.majors = [...new Set(plan.majors.map(value => {
+    const program = data.programs.find(program => program.slug === String(value).split('::')[0]);
+    return program?.majorTracks?.find(track => track.id === value)?.id || program?.majorTracks?.[0]?.id;
+  }).filter(Boolean))];
+  plan.minors = [...new Set(plan.minors.map(value => {
+    const program = data.programs.find(program => program.slug === String(value).split('::')[0]);
+    return program?.minorTracks?.find(track => track.id === value)?.id || program?.minorTracks?.[0]?.id;
+  }).filter(Boolean))];
+  plan.courses = plan.courses.filter(item => item && data.courses.some(course => course.code === item.code));
   savePlan();
   $('#courseOptions').innerHTML = data.courses.map(course => `<option value="${course.code}">${escapeHtml(course.title)}</option>`).join('');
 }
 
 function selectedCourseRecords() {
-  return plan.courses.map(item => ({ ...item, course: data.courses.find(course => course.code === item.code) })).filter(item => item.course);
+  const seen = new Set();
+  // A crosslisted class earns credit once, even in an older saved plan.
+  return plan.courses.slice().sort((a, b) => (a.status === 'completed' ? -1 : 0) - (b.status === 'completed' ? -1 : 0))
+    .map(item => ({ ...item, course: data.courses.find(course => course.code === item.code) })).filter(item => {
+      const identity = `${courseIdentity(item.code)}${item.course?.repeatable ? `::${item.term}` : ''}`;
+      if (!item.course || seen.has(identity)) return false;
+      seen.add(identity); return true;
+    });
+}
+
+let identitySource;
+let identityIndex;
+function courseIdentity(code) {
+  if (identitySource !== data) {
+    identitySource = data;
+    identityIndex = new Map(data.courses.map(course => [course.code, course.code]));
+    const root = value => {
+      while (identityIndex.get(value) && identityIndex.get(value) !== value) value = identityIndex.get(value);
+      return value;
+    };
+    for (const course of data.courses) for (const alias of course.crosslistings || []) {
+      if (identityIndex.has(alias)) identityIndex.set(root(alias), root(course.code));
+    }
+    for (const key of identityIndex.keys()) identityIndex.set(key, root(key));
+  }
+  return identityIndex.get(code) || code;
+}
+
+function alreadyPlanned(code, term, course) {
+  if (!plan.courses.length) return false;
+  course ||= data.courses.find(item => item.code === code);
+  return plan.courses.some(item => courseIdentity(item.code) === courseIdentity(code) && (!course?.repeatable || item.term === term));
+}
+
+function controlCourse(element) {
+  return plan.courses.find(item => item.code === element.dataset.code && item.term === element.dataset.courseTerm);
+}
+
+function moveCourse(item, term) {
+  if (!item || item.term === term) return;
+  if (alreadyPlanned(item.code, term)) {
+    // Non-repeatable classes can move because this is their existing entry.
+    const course = data.courses.find(course => course.code === item.code);
+    if (course?.repeatable) { $('#plannerEntryMessage').textContent = 'That repeatable class is already in the destination semester.'; return; }
+  }
+  item.term = normalizeTerm(term); savePlan(); renderPlanner();
+}
+
+function allocateRequirements(records, groups) {
+  const slots = groups.flatMap((group, index) => Array.from({ length: group.count }, () => ({ index, courses: new Set(group.courses.map(courseIdentity)) })));
+  const matches = new Map();
+  function assign(record, visited) {
+    for (let i = 0; i < slots.length; i += 1) {
+      if (visited.has(i) || !slots[i].courses.has(courseIdentity(record.code))) continue;
+      visited.add(i);
+      if (!matches.has(i) || assign(matches.get(i), visited)) { matches.set(i, record); return true; }
+    }
+    return false;
+  }
+  records.forEach(record => assign(record, new Set()));
+  return groups.map((_, index) => [...matches.entries()].filter(([slot]) => slots[slot].index === index).map(([, record]) => record));
+}
+
+function auditGroups(groups = []) {
+  const records = selectedCourseRecords();
+  const completed = allocateRequirements(records.filter(record => record.status === 'completed'), groups);
+  const planned = allocateRequirements(records, groups);
+  return groups.map((group, index) => ({ rule: group.label,
+    state: completed[index].length >= group.count ? 'met' : planned[index].length >= group.count ? 'scheduled' : 'needed',
+    detail: `${completed[index].length}/${group.count} completed · ${planned[index].length}/${group.count} in plan`,
+    matched: planned[index].map(item => item.code)
+  }));
 }
 
 function divisionAssignment(courses) {
   const divisionRequirements = data.generalEducation.summary.filter(requirement => ['FA', 'SCI', 'SS', 'HU', 'I'].includes(requirement.id));
   const slots = divisionRequirements.flatMap(requirement => Array.from({ length: requirement.count }, (_, index) => ({ id: `${requirement.id}-${index}`, type: requirement.id })));
-  const candidates = courses.filter(course => course.ge.some(tag => tag.confidence !== 'conditional' && ['FA', 'SCI', 'SS', 'HU', 'I'].includes(tag.id)));
+  const candidates = courses.filter(course => courseCredits(course) >= 4 && course.ge.some(tag => ['explicit', 'rule'].includes(tag.confidence) && ['FA', 'SCI', 'SS', 'HU', 'I'].includes(tag.id)));
   const matchBySlot = new Map();
   const usedSubjects = new Set();
   function tryAssign(course, visited) {
-    const eligible = course.ge.filter(tag => tag.confidence !== 'conditional' && ['FA', 'SCI', 'SS', 'HU', 'I'].includes(tag.id)).map(tag => tag.id);
+    const eligible = course.ge.filter(tag => ['explicit', 'rule'].includes(tag.confidence) && ['FA', 'SCI', 'SS', 'HU', 'I'].includes(tag.id)).map(tag => tag.id);
     for (const slot of slots.filter(item => eligible.includes(item.type))) {
       if (visited.has(slot.id)) continue;
       visited.add(slot.id);
@@ -143,7 +235,14 @@ function geProgressFor(records) {
       });
       matched = sequenceComplete ? languageCourses : [];
     } else {
-      matched = courses.filter(course => course.ge.some(tag => tag.id === requirement.id && tag.confidence !== 'conditional'));
+      matched = courses.filter(course => course.ge.some(tag => tag.id === requirement.id && ['explicit', 'rule'].includes(tag.confidence)));
+      if (requirement.id === 'W') {
+        const writingWorkshop = records.find(item => item.course.code === 'W 101');
+        matched = writingWorkshop ? matched.filter(course => {
+          const item = records.find(item => item.course.code === course.code);
+          return SEMESTERS.findIndex(term => term.id === item.term) > SEMESTERS.findIndex(term => term.id === writingWorkshop.term);
+        }) : [];
+      }
     }
     const countMet = Math.min(requirement.count, matched.length);
     const needsLab = requirement.id === 'SCI' && countMet >= requirement.count && !courses.some(course => course.ge.some(tag => tag.id === 'LAB'));
@@ -176,8 +275,36 @@ function selectedMajors() {
   }).filter(Boolean);
 }
 
+function programCombinationWarnings() {
+  const majors = selectedMajors();
+  const minors = selectedMinors();
+  const slugs = [...majors.map(item => item.program.slug), ...minors.map(item => item.slug)];
+  const messages = [];
+  if (slugs.length > 1) messages.push('Each program has its own checklist. Shared course options appear for every relevant program, but graduation credits count once. Shared options still need approval under each program’s rules.');
+  if (slugs.filter(slug => slug === 'mathematics').length > 1) messages.push('Mathematics permits only one major or minor among its Mathematics and Applied Mathematics programs. Choose one.');
+  if (slugs.includes('mathematics') && slugs.length > 1) messages.push('Mathematics requires unshared upper-level MATH courses: two for a minor, three for a BA, or four for a BS. Confirm which courses will be exclusive to Mathematics.');
+  if (slugs.includes('data-analytics') && slugs.length > 1) messages.push('Data Analytics foundations, BS methods, and minor electives have restrictions on sharing with another major or minor elective. Shared suggestions are options until you assign their use.');
+  if (slugs.includes('astronomy') && slugs.includes('physics')) messages.push('Physics upper-level electives cannot also satisfy the Astronomy minor.');
+  if (slugs.includes('journalism') && (slugs.includes('communication') || slugs.includes('english'))) messages.push('The Journalism minor allows at most one shared course with a Communication or English major or minor.');
+  if (slugs.includes('archaeology') && slugs.some(slug => ['ancient-greek-roman-studies', 'art-history-visual-culture', 'anthropology', 'earthandenvironmentalsciences'].includes(slug))) messages.push('For majors in an Archaeology core program, no more than one of the five additional Archaeology courses may count for both major and minor.');
+  if (slugs.includes('middle-east-north-african-studies') && majors.length) messages.push('MENA permits no more than two courses to count toward the major.');
+  if (slugs.includes('music-theatre')) messages.push('Music Theatre requirements change with a Music or Theatre major/minor combination. Use the applicable track in the full catalog wording.');
+  return messages;
+}
+
 function selectedMinors() {
-  return plan.minors.map(slug => data.programs.find(program => program.slug === slug && program.kinds.includes('minor'))).filter(Boolean);
+  return plan.minors.map(id => {
+    const program = data.programs.find(program => program.slug === String(id).split('::')[0] && program.kinds.includes('minor'));
+    let track = program?.minorTracks?.find(track => track.id === id) || program?.minorTracks?.[0];
+    if (program?.slug === 'music-theatre') {
+      const slugs = [...plan.majors, ...plan.minors].map(id => id.split('::')[0]);
+      const index = slugs.includes('music') ? (slugs.includes('theatre') ? 3 : 2) : slugs.includes('theatre') ? 1 : 0;
+      track = program.minorTracks[index];
+    }
+    return track ? { ...program, selectionId: id, minorTrack: track,
+      name: track.label === 'Minor' ? program.name : `${program.name} — ${track.label}`,
+      minorCourses: track.courses, minorText: track.text, minorRequiredCourseCount: track.requiredCourseCount } : null;
+  }).filter(Boolean);
 }
 
 function programCourses(kind, program, track) {
@@ -188,8 +315,8 @@ function programCourses(kind, program, track) {
 
 function directProgramMatches(kind, program, track) {
   if (!program) return [];
-  const selectedCodes = new Set(plan.courses.map(item => item.code));
-  return programCourses(kind, program, track).filter(code => selectedCodes.has(code));
+  const selectedCodes = new Set(plan.courses.map(item => courseIdentity(item.code)));
+  return programCourses(kind, program, track).filter(code => selectedCodes.has(courseIdentity(code)));
 }
 
 function requirementHighlights(text = '') {
@@ -208,25 +335,33 @@ function requirementHighlights(text = '') {
 }
 
 function prerequisiteStatus(course, targetTerm) {
-  if (!course.prerequisites) return { state: 'none', missing: [], codes: [] };
+  if (!course.prerequisites) return { state: course.corequisites ? 'review' : 'none', missing: [], codes: [] };
   const codes = [...new Set([...course.prerequisites.matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]))];
   if (!codes.length) return { state: 'review', missing: [], codes: [] };
   const chosenTerm = targetTerm || (typeof document !== 'undefined' ? $('#plannerCourseTerm')?.value : '') || SEMESTERS[0].id;
   const targetIndex = SEMESTERS.findIndex(semester => semester.id === normalizeTerm(chosenTerm));
-  const available = new Set(plan.courses.filter(item => item.status === 'completed' || SEMESTERS.findIndex(semester => semester.id === normalizeTerm(item.term)) < targetIndex).map(item => item.code));
-  const isAlternative = /\bor\b/i.test(course.prerequisites);
-  const met = isAlternative ? codes.some(code => available.has(code)) : codes.every(code => available.has(code));
-  return { state: met ? 'met' : 'missing', missing: codes.filter(code => !available.has(code)), codes };
+  const available = new Set(plan.courses.filter(item => item.code !== course.code && (item.status === 'completed' || SEMESTERS.findIndex(semester => semester.id === normalizeTerm(item.term)) < targetIndex)).map(item => courseIdentity(item.code)));
+  const text = course.prerequisites.replace(/\.$/, '').trim();
+  const residual = text.replace(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g, '').replace(/\b(?:and|or|both|either)\b/gi, '').replace(/[\s(),.]/g, '');
+  // Do not treat one successful branch as satisfying a mixed AND/OR expression.
+  // Narrative prerequisites (standing, permission, grade, placement) need review.
+  const mixed = /\band\b/i.test(text) && /\bor\b/i.test(text);
+  const eitherBoth = /^either\s+([A-Z]{2,6}\s+\d{3})\s+or\s+both\s+([A-Z]{2,6}\s+\d{3})\s+and\s+([A-Z]{2,6}\s+\d{3})$/i.exec(text);
+  if (residual || (mixed && !eitherBoth) || course.corequisites) return { state: 'review', missing: codes.filter(code => !available.has(courseIdentity(code))), codes };
+  const has = code => available.has(courseIdentity(code));
+  const met = eitherBoth ? has(eitherBoth[1]) || (has(eitherBoth[2]) && has(eitherBoth[3])) : /\bor\b/i.test(text) ? codes.some(has) : codes.every(has);
+  return { state: met ? 'met' : 'missing', missing: codes.filter(code => !has(code)), codes };
 }
 
 function recommendationData() {
-  const selectedCodes = new Set(plan.courses.map(item => item.code));
+  const selectedCodes = new Set(plan.courses.map(item => courseIdentity(item.code)));
   const progress = geProgress();
   const unmet = new Set(progress.filter(requirement => !requirement.planComplete).map(requirement => requirement.id));
   if (progress.some(requirement => requirement.needsLab)) unmet.add('LAB');
   const majors = selectedMajors();
   const minors = selectedMinors();
-  return data.courses.filter(course => !selectedCodes.has(course.code)).map(course => {
+  const term = (typeof document !== 'undefined' ? $('#plannerCourseTerm')?.value : '') || SEMESTERS[0].id;
+  return data.courses.filter(course => !alreadyPlanned(course.code, term, course)).map(course => {
     const reasons = [];
     let score = 0;
     for (const { program, track } of majors) {
@@ -252,8 +387,14 @@ function recommendationData() {
   }).filter(item => item.score > 2.5).sort((a, b) => b.score - a.score || b.reasons.length - a.reasons.length || a.course.code.localeCompare(b.course.code, undefined, { numeric: true }));
 }
 
-function courseCredits(course) {
-  return Number.parseFloat(String(course?.credits || '').match(/\d+(?:\.\d+)?/)?.[0]) || 0;
+function courseCreditRange(course) {
+  const amounts = (String(course?.credits || '').match(/(?:\d*\.)?\d+/g) || ['0']).map(Number);
+  return { min: amounts[0], max: amounts[1] ?? amounts[0] };
+}
+
+function courseCredits(course, selectedCredits) {
+  const { min, max } = courseCreditRange(course);
+  return selectedCredits == null || !Number.isFinite(Number(selectedCredits)) ? min : Math.max(min, Math.min(max, Number(selectedCredits)));
 }
 
 function renderPlanner() {
@@ -263,15 +404,16 @@ function renderPlanner() {
   $('#plannerMinor').value = '';
   const printPrograms = [...majors.map(({ program, track }) => `${program.name}${track.label === 'Major' ? '' : ` — ${track.label}`}`), ...minors.map(program => `${program.name} minor`)];
   $('#printMeta').textContent = `${printPrograms.join(' · ') || 'No major or minor selected'} · Printed ${new Date().toLocaleDateString()}`;
-  $('#selectedPrograms').innerHTML = printPrograms.length ? `${majors.map(({ program, track }) => `<span class="selected-program-chip"><b>Major</b>${escapeHtml(track.label === 'Major' ? program.name : `${program.name} — ${track.label}`)}<button data-remove-major="${escapeHtml(track.id)}" aria-label="Remove ${escapeHtml(program.name)} major">×</button></span>`).join('')}${minors.map(program => `<span class="selected-program-chip"><b>Minor</b>${escapeHtml(program.name)}<button data-remove-minor="${program.slug}" aria-label="Remove ${escapeHtml(program.name)} minor">×</button></span>`).join('')}` : '<p>Choose one or more majors and minors.</p>';
+  $('#selectedPrograms').innerHTML = printPrograms.length ? `${majors.map(({ program, track }) => `<span class="selected-program-chip"><b>Major</b>${escapeHtml(track.label === 'Major' ? program.name : `${program.name} — ${track.label}`)}<button data-remove-major="${escapeHtml(track.id)}" aria-label="Remove ${escapeHtml(program.name)} major">×</button></span>`).join('')}${minors.map(program => `<span class="selected-program-chip"><b>Minor</b>${escapeHtml(program.name)}<button data-remove-minor="${program.selectionId}" aria-label="Remove ${escapeHtml(program.name)} minor">×</button></span>`).join('')}` : '<p>Choose one or more majors and minors.</p>';
+  $('#programPlanNotes').innerHTML = programCombinationWarnings().map(message => `<p>${escapeHtml(message)}</p>`).join('');
   const selected = selectedCourseRecords();
   const statusLabel = status => status === 'current' ? 'In progress' : status === 'completed' ? 'Completed' : 'Planned';
   const semesterCell = semester => {
     const termCourses = selected.filter(item => normalizeTerm(item.term) === semester.id);
-    const credits = termCourses.reduce((total, item) => total + courseCredits(item.course), 0);
-    const coursesHtml = termCourses.map(item => { const prerequisite = prerequisiteStatus(item.course, semester.id); return `<div class="semester-course" draggable="true" data-code="${item.code}">
-        <div class="semester-course-top"><div><strong>${item.course.code}</strong><span>${escapeHtml(item.course.title)}</span></div><button class="remove-course" data-action="remove-course" data-code="${item.code}" aria-label="Remove ${item.code}">×</button></div>
-        <div class="semester-course-controls"><button class="status-toggle ${item.status}" data-action="toggle-status" data-code="${item.code}">${statusLabel(item.status)}</button><label><span>Move to</span><select data-action="move-term" data-code="${item.code}" aria-label="Move ${item.code} to another semester">${semesterOptions(semester.id)}</select></label></div>
+    const credits = termCourses.reduce((total, item) => total + courseCredits(item.course, item.credits), 0);
+    const coursesHtml = termCourses.map(item => { const prerequisite = prerequisiteStatus(item.course, semester.id); return `<div class="semester-course" draggable="true" data-code="${item.code}" data-course-term="${item.term}">
+        <div class="semester-course-top"><div><strong>${item.course.code}</strong><span>${escapeHtml(item.course.title)}</span></div><button class="remove-course" data-action="remove-course" data-code="${item.code}" data-course-term="${item.term}" aria-label="Remove ${item.code}">×</button></div>
+        <div class="semester-course-controls"><button class="status-toggle ${item.status}" data-action="toggle-status" data-code="${item.code}" data-course-term="${item.term}">${statusLabel(item.status)}</button><label><span>Move to</span><select data-action="move-term" data-code="${item.code}" data-course-term="${item.term}" aria-label="Move ${item.code} to another semester">${semesterOptions(semester.id)}</select></label>${courseCreditRange(item.course).min !== courseCreditRange(item.course).max ? `<label><span>Credits</span><input type="number" min="${courseCreditRange(item.course).min}" max="${courseCreditRange(item.course).max}" step="${courseCreditRange(item.course).min % 1 ? '.5' : '1'}" value="${courseCredits(item.course, item.credits)}" data-action="course-credits" data-code="${item.code}" data-course-term="${item.term}" aria-label="Credits for ${item.code}"></label>` : ''}</div>
         ${prerequisite.state === 'missing' ? `<p class="schedule-warning">Check prerequisite timing: ${escapeHtml(prerequisite.missing.join(', '))}</p>` : prerequisite.state === 'review' ? '<p class="schedule-warning">Prerequisite needs manual review.</p>' : ''}
       </div>`; }).join('');
     const paperSlots = Array.from({ length: Math.max(0, 6 - termCourses.length) }, () => '<div class="paper-slot"><span></span></div>').join('');
@@ -297,8 +439,8 @@ function renderPlanner() {
   </button>`).join('');
 
   const graduationRules = data.graduation.requirements;
-  const completedCourseCredits = selected.filter(item => item.status === 'completed').reduce((totalCredits, item) => totalCredits + courseCredits(item.course), 0);
-  const activeCourseCredits = selected.filter(item => item.status !== 'completed').reduce((totalCredits, item) => totalCredits + courseCredits(item.course), 0);
+  const completedCourseCredits = selected.filter(item => item.status === 'completed').reduce((totalCredits, item) => totalCredits + courseCredits(item.course, item.credits), 0);
+  const activeCourseCredits = selected.filter(item => item.status !== 'completed').reduce((totalCredits, item) => totalCredits + courseCredits(item.course, item.credits), 0);
   const completedCredits = completedCourseCredits + (Number(plan.otherCredits) || 0);
   const planCredits = completedCredits + activeCourseCredits;
   const percent = Math.min(100, (planCredits / graduationRules.creditHours) * 100);
@@ -310,26 +452,26 @@ function renderPlanner() {
 
   const programs = [
     ...majors.map(({ program, track }) => ({ kind: 'major', program, track, label: track.label === 'Major' ? program.name : `${program.name} — ${track.label}`, courses: programCourses('major', program, track) })),
-    ...minors.map(program => ({ kind: 'minor', program, track: null, label: program.name, courses: programCourses('minor', program) }))
+    ...minors.map(program => ({ kind: 'minor', program, track: program.minorTrack, label: program.name, courses: programCourses('minor', program) }))
   ];
   $('#programProgress').innerHTML = programs.length ? programs.map(({ kind, program, track, label, courses }) => {
     const matches = directProgramMatches(kind, program, track);
-    const selectedCodes = new Set(plan.courses.map(item => item.code));
+    const selectedCodes = new Set(plan.courses.map(item => courseIdentity(item.code)));
     const requirementText = kind === 'major' ? track?.text : program.minorText;
     const requiredCount = kind === 'major' ? track?.requiredCourseCount : program.minorRequiredCourseCount;
     const statusCounts = { completed: 0, current: 0, planned: 0 };
-    plan.courses.filter(item => courses.includes(item.code)).forEach(item => { statusCounts[item.status] += 1; });
+    selectedCourseRecords().filter(item => courseCredits(item.course) > 0 && new Set(courses.map(courseIdentity)).has(courseIdentity(item.code))).forEach(item => { statusCounts[item.status] += 1; });
     const highlights = requirementHighlights(requirementText || program.requirementsText);
-    const checklist = highlights.map(rule => ({ rule, ...programAuditRule(rule, courses) }));
+    const checklist = [...auditGroups(track?.auditGroups), ...highlights.map(rule => ({ rule, ...programAuditRule(rule) }))];
     const target = requiredCount || Math.max(1, courses.length);
     const coveredCount = statusCounts.completed + statusCounts.current + statusCounts.planned;
     const coveragePercent = Math.min(100, Math.round((coveredCount / target) * 100));
     const courseItems = courses.map(code => {
       const course = data.courses.find(item => item.code === code);
-      const selectedItem = plan.courses.find(item => item.code === code);
+      const selectedItem = plan.courses.find(item => courseIdentity(item.code) === courseIdentity(code));
       return `<li class="${selectedItem ? `covered ${selectedItem.status}` : ''}"><span>${selectedItem?.status === 'completed' ? '✓' : selectedItem ? '◐' : '○'}</span><b>${code}</b>${course ? `<small>${escapeHtml(course.title)}</small>` : ''}</li>`;
     }).join('');
-    return `<article class="program-progress-card" role="button" tabindex="0" data-program="${program.slug}" data-kind="${kind}" data-track="${escapeHtml(kind === 'major' ? track?.id || '' : '')}" aria-label="Open personalized requirements for ${escapeHtml(label)}"><div><span class="program-chip">${kind}</span><strong>${escapeHtml(label)}</strong><span class="open-audit">Open audit →</span></div><p><b>${statusCounts.completed} completed</b> · ${statusCounts.current} in progress · ${statusCounts.planned} planned${requiredCount ? ` toward a catalog minimum of ${requiredCount} courses` : ` across ${courses.length} catalog course options`}.</p><div class="mini-progress" aria-label="${coveragePercent}% of course target represented in plan"><span style="width:${coveragePercent}%"></span></div>
+    return `<article class="program-progress-card" role="button" tabindex="0" data-program="${program.slug}" data-kind="${kind}" data-track="${escapeHtml(track?.id || '')}" aria-label="Open personalized requirements for ${escapeHtml(label)}"><div><span class="program-chip">${kind}</span><strong>${escapeHtml(label)}</strong><span class="open-audit">Open audit →</span></div><p><b>${statusCounts.completed} completed</b> · ${statusCounts.current} in progress · ${statusCounts.planned} planned${requiredCount ? ` toward a catalog minimum of ${requiredCount} courses` : ` across ${courses.length} catalog course options`}.</p><div class="mini-progress" aria-label="${coveragePercent}% of course-option count represented in plan"><span style="width:${coveragePercent}%"></span></div>
       <div class="compact-requirements"><h4>Quick checklist</h4>${checklist.length ? `<ul class="mini-checklist">${checklist.map(item => `<li class="${item.state}"><span>${item.state === 'met' ? '✓' : item.state === 'scheduled' ? '◐' : item.state === 'needed' ? '○' : '?'}</span><b>${escapeHtml(item.rule)}</b></li>`).join('')}</ul>` : '<p class="no-rules">See the complete catalog wording for category and elective rules.</p>'}
       <details><summary>All named courses and options (${courses.length})</summary><ul class="named-course-list">${courseItems || '<li>No specific course codes are named.</li>'}</ul></details></div>
       ${program.catalogOnlyReferences?.length ? `<p class="catalog-only"><b>Catalog-only or legacy references:</b> ${escapeHtml(program.catalogOnlyReferences.join(', '))}. These are not recommended as current courses.</p>` : ''}<small>Course totals are planning coverage, not an official completion decision. Alternatives, grades, residency, and approvals still require advisor review.</small><button class="view-program-button" data-program="${program.slug}">View full requirements</button></article>`;
@@ -351,10 +493,13 @@ function addCourseFromInput(codeOverride, termOverride) {
   const input = $('#plannerCourseInput');
   const raw = codeOverride || input.value.trim();
   const normalized = raw.toUpperCase().match(/^[A-Z]{1,6}\s*\d{3}[A-Z-]*$/)?.[0].replace(/([A-Z])(?=\d)/, '$1 ').replace(/\s+/, ' ');
-  const course = data.courses.find(item => item.code === normalized) || data.courses.find(item => `${item.code} — ${item.title}`.toLowerCase() === raw.toLowerCase());
+  const titleMatches = data.courses.filter(item => item.title.toLowerCase() === raw.toLowerCase());
+  const course = data.courses.find(item => item.code === normalized) || data.courses.find(item => `${item.code} — ${item.title}`.toLowerCase() === raw.toLowerCase()) || (titleMatches.length === 1 ? titleMatches[0] : null);
+  if (!course && titleMatches.length > 1) { $('#plannerEntryMessage').textContent = 'More than one course has that title. Choose its course code.'; return; }
   if (!course) { $('#plannerEntryMessage').textContent = 'Choose a course code from the catalog list.'; return; }
-  if (plan.courses.some(item => item.code === course.code)) { $('#plannerEntryMessage').textContent = `${course.code} is already in your plan.`; return; }
-  plan.courses.push({ code: course.code, status: codeOverride ? 'planned' : $('#plannerCourseStatus').value, term: normalizeTerm(termOverride || $('#plannerCourseTerm').value) });
+  const term = normalizeTerm(termOverride || $('#plannerCourseTerm').value);
+  if (alreadyPlanned(course.code, term)) { $('#plannerEntryMessage').textContent = `${course.code} or its crosslisted equivalent is already in your plan${course.repeatable ? ' in this semester' : ''}.`; return; }
+  plan.courses.push({ code: course.code, status: codeOverride ? 'planned' : $('#plannerCourseStatus').value, term });
   input.value = '';
   $('#plannerEntryMessage').textContent = `${course.code} added.`;
   savePlan();
@@ -363,20 +508,26 @@ function addCourseFromInput(codeOverride, termOverride) {
 
 function bindPlannerResultEvents() {
   $$('[data-remove-major]').forEach(button => button.addEventListener('click', () => { plan.majors = plan.majors.filter(id => id !== button.dataset.removeMajor); savePlan(); renderPlanner(); }));
-  $$('[data-remove-minor]').forEach(button => button.addEventListener('click', () => { plan.minors = plan.minors.filter(slug => slug !== button.dataset.removeMinor); savePlan(); renderPlanner(); }));
+  $$('[data-remove-minor]').forEach(button => button.addEventListener('click', () => { plan.minors = plan.minors.filter(id => id !== button.dataset.removeMinor); savePlan(); renderPlanner(); }));
   $$('[data-action="remove-course"]').forEach(button => button.addEventListener('click', () => {
-    plan.courses = plan.courses.filter(item => item.code !== button.dataset.code); savePlan(); renderPlanner();
+    const item = controlCourse(button);
+    plan.courses = plan.courses.filter(record => record !== item); savePlan(); renderPlanner();
   }));
   $$('[data-action="toggle-status"]').forEach(button => button.addEventListener('click', () => {
-    const item = plan.courses.find(course => course.code === button.dataset.code);
+    const item = controlCourse(button);
     item.status = item.status === 'completed' ? 'current' : item.status === 'current' ? 'planned' : 'completed'; savePlan(); renderPlanner();
   }));
   $$('[data-action="move-term"]').forEach(select => select.addEventListener('change', () => {
-    const item = plan.courses.find(course => course.code === select.dataset.code);
-    if (item) { item.term = normalizeTerm(select.value); savePlan(); renderPlanner(); }
+    moveCourse(controlCourse(select), select.value);
+  }));
+  $$('[data-action="course-credits"]').forEach(input => input.addEventListener('change', () => {
+    if (!input.reportValidity()) return;
+    const item = controlCourse(input);
+    item.credits = courseCredits(data.courses.find(course => course.code === item.code), input.value);
+    savePlan(); renderPlanner();
   }));
   $$('.semester-course').forEach(card => card.addEventListener('dragstart', event => {
-    event.dataTransfer.setData('text/plain', card.dataset.code);
+    event.dataTransfer.setData('text/plain', JSON.stringify({ code: card.dataset.code, term: card.dataset.courseTerm }));
     event.dataTransfer.effectAllowed = 'move';
   }));
   $$('.semester-dropzone').forEach(zone => {
@@ -384,8 +535,10 @@ function bindPlannerResultEvents() {
     zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
     zone.addEventListener('drop', event => {
       event.preventDefault();
-      const item = plan.courses.find(course => course.code === event.dataTransfer.getData('text/plain'));
-      if (item) { item.term = normalizeTerm(zone.dataset.term); savePlan(); renderPlanner(); }
+      try {
+        const value = JSON.parse(event.dataTransfer.getData('text/plain'));
+        moveCourse(plan.courses.find(item => item.code === value.code && item.term === value.term), zone.dataset.term);
+      } catch (_) { /* Ignore unrelated drag content. */ }
     });
   });
   $$('.quick-add').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); addCourseFromInput(button.dataset.addCode); }));
@@ -439,7 +592,7 @@ function renderCourses() {
 
 function openCourse(code) {
   const course = data.courses.find(item => item.code === code); if (!course) return;
-  const alreadyAdded = plan.courses.some(item => item.code === course.code);
+  const alreadyAdded = alreadyPlanned(course.code, $('#plannerCourseTerm').value);
   $('#courseDialogBody').innerHTML = `<span class="dialog-code">${course.code} · ${escapeHtml(course.credits)}</span><h2 class="dialog-title">${escapeHtml(course.title)}</h2><p class="dialog-copy">${escapeHtml(course.description)}</p>
   ${course.details ? `<p class="dialog-copy"><strong>Catalog details</strong><br>${escapeHtml(course.details).replace(/\n/g, '<br>')}</p>` : ''}
   <h3>What it may fulfill</h3><div class="fulfillment-list">${course.ge.length ? course.ge.map(tag => `<div class="fulfillment"><strong>${escapeHtml(tag.label)}</strong><small>${escapeHtml(tag.evidence)} · ${tag.confidence}</small></div>`).join('') : '<p>No GE mapping was found in the catalog text.</p>'}</div>
@@ -449,32 +602,10 @@ function openCourse(code) {
   $('#dialogAddCourse').addEventListener('click', () => { addCourseFromInput(course.code); $('#courseDialog').close(); });
 }
 
-function programAuditRule(rule, pool) {
-  const selected = new Map(plan.courses.map(item => [item.code, item]));
-  const statusFor = codes => {
-    const items = codes.map(code => selected.get(code)).filter(Boolean);
-    if (!items.length) return 'needed';
-    if (items.every(item => item.status === 'completed')) return 'met';
-    return 'scheduled';
-  };
-  const codes = [...new Set([...rule.matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]).filter(code => pool.includes(code)))];
-  if (codes.length) {
-    const alternatives = /\b(?:or|either|one of|selected from)\b/i.test(rule);
-    const chosen = codes.filter(code => selected.has(code));
-    const satisfied = alternatives ? chosen.length > 0 : chosen.length === codes.length;
-    return { state: satisfied ? statusFor(chosen) : chosen.length ? 'scheduled' : 'needed', detail: `${chosen.length} of ${alternatives ? 1 : codes.length} named ${alternatives ? 'option' : 'course(s)'} in plan` };
-  }
-  const numberLookup = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-  const levelMatch = rule.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b[^.]{0,55}?\b([1-4])00[- ]level/i);
-  if (levelMatch) {
-    const needed = Number(levelMatch[1]) || numberLookup[levelMatch[1].toLowerCase()];
-    const eligible = pool.filter(code => code.split(' ')[1]?.startsWith(levelMatch[2]));
-    const chosen = eligible.filter(code => selected.has(code));
-    const completed = chosen.filter(code => selected.get(code).status === 'completed').length;
-    const state = completed >= needed ? 'met' : chosen.length >= needed ? 'scheduled' : 'needed';
-    return { state, detail: `${completed} completed · ${chosen.length - completed} scheduled · ${Math.max(0, needed - chosen.length)} still needed` };
-  }
-  return { state: 'review', detail: 'Requires catalog/advisor review' };
+function programAuditRule(rule) {
+  // Prose may contain exclusions, examples, GPA thresholds or partial rules.
+  // Only the curated auditGroups may produce an automatic completion result.
+  return { state: 'review', detail: 'Review this catalog rule with your advisor' };
 }
 
 function programAuditContext(program, preferredKind, trackId) {
@@ -484,9 +615,10 @@ function programAuditContext(program, preferredKind, trackId) {
   if (!kind) kind = selectedMajor ? 'major' : selectedMinor ? 'minor' : program.kinds.includes('major') ? 'major' : 'minor';
   let track = null;
   if (kind === 'major') track = program.majorTracks.find(item => item.id === trackId) || selectedMajor?.track || program.majorTracks[0];
-  const pool = kind === 'major' ? track?.courses || [] : program.minorCourses || [];
-  const text = kind === 'major' ? track?.text || program.requirementsText : program.minorText || program.requirementsText;
-  const requiredCount = kind === 'major' ? track?.requiredCourseCount : program.minorRequiredCourseCount;
+  if (kind === 'minor') track = program.minorTracks.find(item => item.id === trackId) || selectedMinor?.minorTrack || program.minorTracks[0];
+  const pool = track?.courses || [];
+  const text = track?.text || program.requirementsText;
+  const requiredCount = track?.requiredCourseCount;
   return { kind, track, pool, text, requiredCount };
 }
 
@@ -496,21 +628,23 @@ function renderProgram(slug, preferredKind, trackId) {
   $('#programSelect').value = slug;
   const modes = [
     ...program.majorTracks.map(track => ({ kind: 'major', id: track.id, label: track.label === 'Major' ? 'Major' : track.label })),
-    ...(program.kinds.includes('minor') ? [{ kind: 'minor', id: '', label: 'Minor' }] : [])
+    ...program.minorTracks.map(track => ({ kind: 'minor', id: track.id, label: track.label }))
   ];
-  $('#programSummary').innerHTML = `<div>${program.kinds.map(kind => `<span class="program-chip">${kind}</span>`).join('')}</div><p class="program-meta">Choose a program version to see how your saved plan maps to its current catalog rules.</p><div class="program-mode-list">${modes.map(mode => `<button class="program-mode ${context.kind === mode.kind && (mode.kind === 'minor' || context.track?.id === mode.id) ? 'active' : ''}" data-program-mode="${mode.kind}" data-track-id="${escapeHtml(mode.id)}">${escapeHtml(mode.label)}</button>`).join('')}</div>${program.catalogOnlyReferences?.length ? `<p class="program-meta"><b>Not in the current course index:</b> ${escapeHtml(program.catalogOnlyReferences.join(', '))}</p>` : ''}`;
+  $('#programSummary').innerHTML = `<div>${program.kinds.map(kind => `<span class="program-chip">${kind}</span>`).join('')}</div><p class="program-meta">Choose a program version to see how your saved plan maps to its current catalog rules.</p><div class="program-mode-list">${modes.map(mode => `<button class="program-mode ${context.kind === mode.kind && context.track?.id === mode.id ? 'active' : ''}" data-program-mode="${mode.kind}" data-track-id="${escapeHtml(mode.id)}">${escapeHtml(mode.label)}</button>`).join('')}</div>${program.catalogOnlyReferences?.length ? `<p class="program-meta"><b>Not in the current course index:</b> ${escapeHtml(program.catalogOnlyReferences.join(', '))}</p>` : ''}`;
 
-  const selectedItems = plan.courses.filter(item => context.pool.includes(item.code)).map(item => ({ ...item, course: data.courses.find(course => course.code === item.code) })).filter(item => item.course);
+  const identities = new Set(context.pool.map(courseIdentity));
+  const selectedItems = selectedCourseRecords().filter(item => identities.has(courseIdentity(item.code)));
   const counts = { completed: 0, current: 0, planned: 0 };
-  selectedItems.forEach(item => { counts[item.status] += 1; });
-  const remainingCount = context.requiredCount == null ? null : Math.max(0, context.requiredCount - selectedItems.length);
-  const rules = requirementHighlights(context.text).map(rule => ({ rule, ...programAuditRule(rule, context.pool) }));
+  const creditBearingItems = selectedItems.filter(item => courseCredits(item.course) > 0);
+  creditBearingItems.forEach(item => { counts[item.status] += 1; });
+  const remainingCount = context.requiredCount == null ? null : Math.max(0, context.requiredCount - creditBearingItems.length);
+  const rules = [...auditGroups(context.track?.auditGroups), ...requirementHighlights(context.text).map(rule => ({ rule, ...programAuditRule(rule) }))];
   const ruleList = rules.length ? rules.map(item => `<li class="audit-rule ${item.state}"><span>${item.state === 'met' ? '✓' : item.state === 'scheduled' ? '◐' : item.state === 'needed' ? '○' : '?'}</span><div><b>${escapeHtml(item.rule)}</b><small>${escapeHtml(item.detail)}</small></div></li>`).join('') : '<li class="audit-rule review"><span>?</span><div><b>No machine-readable rule summary was available.</b><small>Use the official wording below and confirm with your advisor.</small></div></li>';
   const checklistOrder = { completed: 0, current: 1, planned: 2, unplanned: 3 };
   const courseChecklist = context.pool.map(code => {
     const course = data.courses.find(item => item.code === code);
     if (!course) return null;
-    const selectedItem = plan.courses.find(item => item.code === code);
+    const selectedItem = plan.courses.find(item => courseIdentity(item.code) === courseIdentity(code));
     const state = selectedItem?.status || 'unplanned';
     const icon = state === 'completed' ? '✓' : state === 'current' ? '◐' : state === 'planned' ? '◆' : '□';
     const label = state === 'completed' ? 'Completed' : state === 'current' ? 'In progress' : state === 'planned' ? 'Planned' : 'Not scheduled';
@@ -518,11 +652,11 @@ function renderProgram(slug, preferredKind, trackId) {
   }).filter(Boolean).sort((a, b) => checklistOrder[a.state] - checklistOrder[b.state] || a.course.code.localeCompare(b.course.code, undefined, { numeric: true }));
   const checklistHtml = courseChecklist.map(item => `<li class="program-course-item ${item.state}"><span class="course-check-icon">${item.icon}</span><button data-audit-course="${item.course.code}"><b>${item.course.code}</b><span>${escapeHtml(item.course.title)}</span></button><small>${item.label}</small>${item.state === 'unplanned' ? `<button class="audit-add" data-add-code="${item.course.code}">+ Add</button>` : ''}</li>`).join('');
   const checklistTarget = context.requiredCount || context.pool.length || 1;
-  const checklistPercent = Math.min(100, Math.round((selectedItems.length / checklistTarget) * 100));
-  const title = context.kind === 'major' && context.track?.label !== 'Major' ? `${program.name} — ${context.track.label}` : `${program.name} ${context.kind}`;
-  $('#programDetail').innerHTML = `<div class="audit-heading"><p class="eyebrow">Personalized program audit</p><h2>${escapeHtml(title)}</h2><p><b>${counts.completed} completed</b> · ${counts.current} in progress · ${counts.planned} planned${remainingCount == null ? '' : ` · ${remainingCount} course slot${remainingCount === 1 ? '' : 's'} not yet planned`}</p></div>
-    <section class="audit-section"><h3>Requirement checklist</h3><ul class="audit-rules">${ruleList}</ul></section>
-    <section class="audit-section program-course-checklist"><div class="course-checklist-heading"><div><h3>Course checklist</h3><p>Every current course named or included by a catalog rule is shown here. Some entries are alternatives, electives, or prerequisite pathways—not classes every student must take.</p></div><b>${checklistPercent}% planned</b></div><div class="mini-progress"><span style="width:${checklistPercent}%"></span></div><div class="checklist-legend"><span class="completed">✓ Completed</span><span class="current">◐ In progress</span><span class="planned">◆ Planned</span><span class="unplanned">□ Not scheduled</span></div><ul>${checklistHtml || '<li class="empty-audit">No current course codes were identified for this program.</li>'}</ul></section>
+  const checklistPercent = Math.min(100, Math.round((creditBearingItems.length / checklistTarget) * 100));
+  const title = context.track && !['Major', 'Minor'].includes(context.track.label) ? `${program.name} — ${context.track.label}` : `${program.name} ${context.kind}`;
+  $('#programDetail').innerHTML = `<div class="audit-heading"><p class="eyebrow">Personalized program audit</p><h2>${escapeHtml(title)}</h2><p><b>${counts.completed} completed</b> · ${counts.current} in progress · ${counts.planned} planned${remainingCount == null ? '' : ` · ${remainingCount} more course option${remainingCount === 1 ? '' : 's'} to reach the catalog count`}</p></div>
+    <section class="audit-section"><h3>Requirement checklist</h3><p>Checkable course groups use each class once. Course-option totals do not establish that all requirements are complete.</p><ul class="audit-rules">${ruleList}</ul><p>${escapeHtml((context.track?.reviewNotes || []).join(' '))}</p></section>
+    <section class="audit-section program-course-checklist"><div class="course-checklist-heading"><div><h3>Course checklist</h3><p>Every current course named or included by a catalog rule is shown here. Some entries are alternatives, electives, or prerequisite pathways—not classes every student must take.</p></div><b>${checklistPercent}% of course-option count</b></div><div class="mini-progress"><span style="width:${checklistPercent}%"></span></div><div class="checklist-legend"><span class="completed">✓ Completed</span><span class="current">◐ In progress</span><span class="planned">◆ Planned</span><span class="unplanned">□ Not scheduled</span></div><ul>${checklistHtml || '<li class="empty-audit">No current course codes were identified for this program.</li>'}</ul></section>
     <details class="official-requirements"><summary>Read complete catalog wording</summary><pre>${escapeHtml(context.text || 'No dedicated requirements text was published on this catalog page.')}</pre></details><a href="${program.sourceUrl}" target="_blank" rel="noreferrer">Open official requirements ↗</a>`;
   $$('.program-mode').forEach(button => button.addEventListener('click', () => renderProgram(program.slug, button.dataset.programMode, button.dataset.trackId)));
   $$('[data-audit-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.auditCourse)));
@@ -540,11 +674,11 @@ function electiveData(filters = {}) {
   const subject = filters.subject ?? (typeof document !== 'undefined' ? $('#electiveSubject')?.value : '');
   const level = filters.level ?? (typeof document !== 'undefined' ? $('#electiveLevel')?.value : '');
   const readyOnly = filters.readyOnly ?? (typeof document !== 'undefined' ? Boolean($('#electiveReady')?.checked) : true);
-  const selectedCodes = new Set(plan.courses.map(item => item.code));
+  const selectedCodes = new Set(plan.courses.map(item => courseIdentity(item.code)));
   const majors = selectedMajors();
   const minors = selectedMinors();
   const unmetGe = new Set(geProgress().filter(requirement => !requirement.planComplete).map(requirement => requirement.id));
-  return data.courses.filter(course => !selectedCodes.has(course.code) && (!subject || course.subject === subject) && (!level || course.number.startsWith(level))).map(course => {
+  return data.courses.filter(course => !alreadyPlanned(course.code, term, course) && (!subject || course.subject === subject) && (!level || course.number.startsWith(level))).map(course => {
     const prerequisite = prerequisiteStatus(course, term);
     if (readyOnly && !['none', 'met'].includes(prerequisite.state)) return null;
     const benefits = [];
@@ -625,17 +759,17 @@ function bindEvents() {
   const addMinor = () => {
     const input = $('#plannerMinor');
     const value = input.value.trim();
-    const match = data.programs.find(program => program.kinds.includes('minor') && program.name.toLowerCase() === value.toLowerCase());
+    const match = minorChoices().find(choice => choice.label.toLowerCase() === value.toLowerCase());
     input.setCustomValidity(value && !match ? 'Choose a minor from the catalog suggestions.' : '');
     if (!match) { input.reportValidity(); return; }
-    if (!plan.minors.includes(match.slug)) plan.minors.push(match.slug);
+    plan.minors = [...plan.minors.filter(id => id.split('::')[0] !== match.slug), match.id];
     savePlan(); renderPlanner();
   };
   $('#addMajor').addEventListener('click', addMajor);
   $('#plannerMajor').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); addMajor(); } });
   $('#plannerMinor').addEventListener('input', event => {
     const value = event.target.value.trim();
-    const match = data.programs.find(program => program.kinds.includes('minor') && program.name.toLowerCase() === value.toLowerCase());
+    const match = minorChoices().find(choice => choice.label.toLowerCase() === value.toLowerCase());
     event.target.setCustomValidity(value && !match ? 'Choose a minor from the catalog suggestions.' : '');
   });
   $('#addMinor').addEventListener('click', addMinor);
@@ -673,6 +807,13 @@ if (typeof module !== 'undefined' && module.exports) {
     prerequisiteStatus,
     courseCredits,
     programAuditRule,
+    auditGroups,
+    courseIdentity,
+    selectedCourseRecords,
+    selectedMajors,
+    selectedMinors,
+    programCourses,
+    programCombinationWarnings,
     electiveData,
     divisionAssignment,
     requirementHighlights,

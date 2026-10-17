@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,650&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261014-2">
+  <link rel="stylesheet" href="styles.css?v=20261016-audit">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to main content</a>
@@ -62,6 +62,7 @@
         </label><button id="addMinor" type="button">Add minor</button></div>
         <div class="save-note"><span class="save-dot"></span><span>Your plan saves in this browser</span></div>
         <div id="selectedPrograms" class="selected-programs" aria-live="polite"></div>
+        <div id="programPlanNotes" class="program-plan-notes" aria-live="polite"></div>
       </div>
 
       <div class="planner-course-entry">
@@ -97,6 +98,7 @@
       <div class="planner-dashboard">
         <section class="planner-progress-panel">
           <div class="section-heading"><div><p class="eyebrow">Your progress</p><h3>Requirements coverage</h3></div><span id="coverageSummary"></span></div>
+          <p>GE progress counts explicit catalog mappings and sequence rules. Inferred subject tags need confirmation in the class schedule; placement, course pairing, and writing deadlines still need review.</p>
           <div id="progressCards" class="progress-cards"></div>
           <div id="programProgress" class="program-progress"></div>
         </section>
@@ -186,6 +188,6 @@
   </dialog>
 
   <footer>Built from Denison University’s official 2026–2027 Academic Catalog. <span id="retrievedDate"></span></footer>
-  <script src="app.js?v=20261014-2"></script>
+  <script src="app.js?v=20261016-audit"></script>
 </body>
 </html>
