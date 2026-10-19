@@ -13,6 +13,14 @@ const SEMESTERS = [
   { id: 'y4-fall', year: 'Fourth Year', season: 'Fall' },
   { id: 'y4-spring', year: 'Fourth Year', season: 'Spring' }
 ];
+const STUDY_ABROAD_GUIDANCE = {
+  university: { label: 'University or direct enrollment', targets: ['Major/minor electives with preapproval', 'General education', 'Open graduation credit'] },
+  language: { label: 'Language & cultural immersion', targets: ['Foreign Language', 'Humanities', 'Writing Intensive', 'Regional studies or electives'] },
+  internship: { label: 'Internship or professional experience', targets: ['Experiential learning', 'Oral Communication', 'Interdivisional or open electives'] },
+  research: { label: 'Field research or experiential study', targets: ['Science or Quantitative Reasoning', 'Methods courses', 'Major elective with preapproval'] },
+  stem: { label: 'STEM, computing & data', targets: ['Sciences', 'Quantitative Reasoning', 'Computing, math, or data elective with preapproval'] },
+  arts: { label: 'Arts & humanities', targets: ['Fine Arts', 'Humanities', 'Writing Intensive', 'Open electives'] }
+};
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 
@@ -53,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-5');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-6');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -437,6 +445,30 @@ function recommendedStatus(entry) {
   return entry.flexible ? 'flexible' : 'program';
 }
 
+function studyAbroadGuidance(focus = 'university') {
+  return STUDY_ABROAD_GUIDANCE[focus] || STUDY_ABROAD_GUIDANCE.university;
+}
+
+function renderStudyAbroadRecommendations() {
+  const term = $('#studyAbroadDialogTerm').value;
+  const semester = SEMESTERS.find(item => item.id === term) || SEMESTERS[4];
+  const guidance = studyAbroadGuidance($('#studyAbroadFocus').value);
+  const region = $('#studyAbroadRegion').value || 'any approved destination';
+  const draft = recommendedDraft.length ? recommendedDraft : buildRecommendedPlan($('#recommendedLoad').value, { studyAbroadTerm: term });
+  const termEntries = draft.filter(entry => entry.term === term && entry.course);
+  const flexible = termEntries.filter(entry => entry.flexible);
+  const fixed = termEntries.filter(entry => !entry.flexible);
+  const courseList = entries => entries.length ? `<ul>${entries.map(entry => `<li><button type="button" data-abroad-course="${entry.course.code}"><b>${entry.course.code}</b><span>${escapeHtml(entry.course.title)}</span></button></li>`).join('')}</ul>` : '<p class="compare-empty">No matching course is currently in this draft.</p>';
+  $('#studyAbroadRecommendations').innerHTML = `<div class="study-abroad-choice-summary"><span>${semester.year} · ${semester.season}</span><strong>${escapeHtml(region)}</strong><small>${escapeHtml(guidance.label)}</small></div><section><h3>Good requirements to target</h3><div class="study-abroad-targets">${guidance.targets.map(target => `<span>${escapeHtml(target)}</span>`).join('')}</div></section><div class="study-abroad-course-columns"><section><h3>Flexible draft courses to match abroad</h3><p>Look for approved equivalents that can replace these flexible choices.</p>${courseList(flexible)}</section><section><h3>Program courses to review carefully</h3><p>Keep these at Denison unless the department approves a replacement.</p>${courseList(fixed)}</section></div>`;
+  $$('[data-abroad-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.abroadCourse)));
+}
+
+function openStudyAbroadPlanner(term) {
+  $('#studyAbroadDialogTerm').value = ['y3-fall', 'y3-spring'].includes(term) ? term : 'y3-fall';
+  renderStudyAbroadRecommendations();
+  $('#studyAbroadDialog').showModal();
+}
+
 function renderRecommendedPlan(force = false) {
   const programs = [...selectedMajors().map(({ program, track }) => track.label === 'Major' ? program.name : `${program.name} — ${track.label}`), ...selectedMinors().map(program => `${program.name} minor`)];
   $('#recommendedPrograms').textContent = programs.join(' · ') || 'Choose a major or minor in My plan first.';
@@ -456,9 +488,11 @@ function renderRecommendedPlan(force = false) {
   $('#recommendedPlan').innerHTML = SEMESTERS.map(semester => {
     const semesterEntries = recommendedDraft.filter(entry => entry.term === semester.id);
     const isStudyAbroad = semester.id === $('#studyAbroadTerm').value;
-    return `<article class="recommended-term ${isStudyAbroad ? 'study-abroad' : ''}"><header><div><span>${semester.year}</span><h3>${semester.season}</h3></div><b>${isStudyAbroad ? 'Study abroad · ' : ''}${semesterEntries.length} classes</b></header>${isStudyAbroad ? '<aside class="study-abroad-note"><strong>Good fits abroad</strong><span>Approved language, humanities, fine arts, interdivisional, GE, and open-elective equivalents. Confirm transfer and major/minor approval before enrolling.</span></aside>' : ''}<div>${semesterEntries.map(entry => `<div class="recommended-course ${recommendedStatus(entry)}"><div class="recommended-course-title"><span>${entry.flexible ? '↻' : entry.type === 'existing' ? '✓' : '◆'}</span><button data-recommended-course="${entry.course.code}"><b>${entry.course.code}</b><small>${escapeHtml(entry.course.title)}</small></button></div><p>${escapeHtml(isStudyAbroad && entry.flexible ? `Study abroad option · ${entry.reason}` : entry.reason)}</p>${entry.flexible && entry.alternatives.length > 1 ? `<label>Swap choice<select data-swap-recommended="${escapeHtml(entry.id)}">${entry.alternatives.map(course => `<option value="${course.code}" ${course.code === entry.course.code ? 'selected' : ''}>${course.code} · ${escapeHtml(course.title)}</option>`).join('')}</select></label>` : ''}</div>`).join('')}</div></article>`;
+    const juniorStudyButton = semester.year === 'Third Year' ? `<button class="study-abroad-trigger ${isStudyAbroad ? 'active' : ''}" type="button" data-study-abroad-term="${semester.id}">${isStudyAbroad ? 'Edit study abroad' : 'Study abroad'}</button>` : '';
+    return `<article class="recommended-term ${isStudyAbroad ? 'study-abroad' : ''}"><header><div><span>${semester.year}</span><h3>${semester.season}</h3></div><div class="recommended-term-actions"><b>${isStudyAbroad ? 'Study abroad · ' : ''}${semesterEntries.length} classes</b>${juniorStudyButton}</div></header>${isStudyAbroad ? '<aside class="study-abroad-note"><strong>Good fits abroad</strong><span>Approved language, humanities, fine arts, interdivisional, GE, and open-elective equivalents. Confirm transfer and major/minor approval before enrolling.</span></aside>' : ''}<div>${semesterEntries.map(entry => `<div class="recommended-course ${recommendedStatus(entry)}"><div class="recommended-course-title"><span>${entry.flexible ? '↻' : entry.type === 'existing' ? '✓' : '◆'}</span><button data-recommended-course="${entry.course.code}"><b>${entry.course.code}</b><small>${escapeHtml(entry.course.title)}</small></button></div><p>${escapeHtml(isStudyAbroad && entry.flexible ? `Study abroad option · ${entry.reason}` : entry.reason)}</p>${entry.flexible && entry.alternatives.length > 1 ? `<label>Swap choice<select data-swap-recommended="${escapeHtml(entry.id)}">${entry.alternatives.map(course => `<option value="${course.code}" ${course.code === entry.course.code ? 'selected' : ''}>${course.code} · ${escapeHtml(course.title)}</option>`).join('')}</select></label>` : ''}</div>`).join('')}</div></article>`;
   }).join('');
   $$('[data-recommended-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.recommendedCourse)));
+  $$('[data-study-abroad-term]').forEach(button => button.addEventListener('click', () => openStudyAbroadPlanner(button.dataset.studyAbroadTerm)));
   $$('[data-swap-recommended]').forEach(select => select.addEventListener('change', () => {
     const attemptedCode = select.value;
     const entry = recommendedDraft.find(item => item.id === select.dataset.swapRecommended);
@@ -868,6 +902,15 @@ function bindEvents() {
   });
   $('#recommendedLoad').addEventListener('change', () => renderRecommendedPlan(true));
   $('#studyAbroadTerm').addEventListener('change', () => renderRecommendedPlan(true));
+  ['studyAbroadDialogTerm', 'studyAbroadRegion', 'studyAbroadFocus'].forEach(id => $('#' + id).addEventListener('change', renderStudyAbroadRecommendations));
+  $('#applyStudyAbroadChoice').addEventListener('click', () => {
+    $('#studyAbroadTerm').value = $('#studyAbroadDialogTerm').value;
+    renderRecommendedPlan(true);
+    $('#studyAbroadDialog').close();
+    document.querySelector(`[data-study-abroad-term="${$('#studyAbroadTerm').value}"]`)?.focus();
+  });
+  $('#closeStudyAbroadDialog').addEventListener('click', () => $('#studyAbroadDialog').close());
+  $('#studyAbroadDialog').addEventListener('click', event => { if (event.target === $('#studyAbroadDialog')) $('#studyAbroadDialog').close(); });
   $('#applyRecommendedPlan').addEventListener('click', () => {
     const additions = recommendedDraft.filter(entry => entry.course && !plan.courses.some(item => item.code === entry.course.code)).map(entry => ({ code: entry.course.code, status: 'planned', term: entry.term }));
     plan.courses.push(...additions);
@@ -941,6 +984,7 @@ if (typeof module !== 'undefined' && module.exports) {
     programCourseGroups,
     buildRecommendedPlan,
     compareMajorTracks,
+    studyAbroadGuidance,
     divisionAssignment,
     requirementHighlights,
     feedbackIssueUrl,

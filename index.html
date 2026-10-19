@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,650&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261019-5">
+  <link rel="stylesheet" href="styles.css?v=20261019-6">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to main content</a>
@@ -214,7 +214,25 @@
     <div id="courseDialogBody"></div>
   </dialog>
 
+  <dialog id="studyAbroadDialog" aria-labelledby="studyAbroadTitle">
+    <button id="closeStudyAbroadDialog" class="dialog-close" aria-label="Close study abroad planner">×</button>
+    <p class="eyebrow">Junior-year planning</p>
+    <h2 id="studyAbroadTitle" class="dialog-title">Plan a study abroad semester</h2>
+    <p class="dialog-copy">Choose a term, region, and academic focus. We’ll show useful requirement targets and courses from your draft to discuss with Global Programs and your advisor.</p>
+    <div class="study-abroad-fields">
+      <label>Semester<select id="studyAbroadDialogTerm"><option value="y3-fall">Third Year · Fall</option><option value="y3-spring">Third Year · Spring</option></select></label>
+      <label>Where would you like to explore?<select id="studyAbroadRegion"><option value="">Any region</option><option>Europe</option><option>Latin America &amp; Caribbean</option><option>Asia</option><option>Africa &amp; Middle East</option><option>Oceania</option><option>United States / domestic off-campus</option></select></label>
+      <label>Academic experience<select id="studyAbroadFocus"><option value="university">University or direct enrollment</option><option value="language">Language &amp; cultural immersion</option><option value="internship">Internship or professional experience</option><option value="research">Field research or experiential study</option><option value="stem">STEM, computing &amp; data</option><option value="arts">Arts &amp; humanities</option></select></label>
+    </div>
+    <div id="studyAbroadRecommendations" class="study-abroad-recommendations" aria-live="polite"></div>
+    <div class="study-abroad-policy"><strong>Approval matters</strong><p>General and most GE credit is determined through Denison’s off-campus course approval process. Major or minor credit needs department or program approval. These suggestions are planning targets, not guaranteed equivalencies.</p></div>
+    <div class="dialog-actions study-abroad-actions">
+      <div><a href="https://ocsdenison.via-trm.com/visitor-programs-v2/" target="_blank" rel="noreferrer">Browse Denison’s approved programs ↗</a><a href="https://denison.edu/academics/curriculum/academic-policies" target="_blank" rel="noreferrer">Read credit approval policies ↗</a></div>
+      <button id="applyStudyAbroadChoice" class="primary-button" type="button">Use this study abroad term</button>
+    </div>
+  </dialog>
+
   <footer>Built from Denison University’s official 2026–2027 Academic Catalog. <span id="retrievedDate"></span></footer>
-  <script src="app.js?v=20261019-5"></script>
+  <script src="app.js?v=20261019-6"></script>
 </body>
 </html>
