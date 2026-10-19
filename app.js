@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-10');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-11');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -659,11 +659,12 @@ function renderPlanner() {
     const selectedCodes = new Set(plan.courses.map(item => item.code));
     const requirementText = kind === 'major' ? track?.text : program.minorText;
     const requiredCount = kind === 'major' ? track?.requiredCourseCount : program.minorRequiredCourseCount;
+    const courseTarget = programTarget(kind, program, track, programCourseGroups(kind, program, track).length);
     const statusCounts = { completed: 0, current: 0, planned: 0 };
     plan.courses.filter(item => courses.includes(item.code)).forEach(item => { statusCounts[item.status] += 1; });
     const highlights = requirementHighlights(requirementText || program.requirementsText);
     const checklist = highlights.map(rule => ({ rule, ...programAuditRule(rule, courses) }));
-    const target = requiredCount || Math.max(1, courses.length);
+    const target = courseTarget || Math.max(1, courses.length);
     const coveredCount = statusCounts.completed + statusCounts.current + statusCounts.planned;
     const coveragePercent = Math.min(100, Math.round((coveredCount / target) * 100));
     const courseItems = courses.map(code => {
@@ -671,7 +672,7 @@ function renderPlanner() {
       const selectedItem = plan.courses.find(item => item.code === code);
       return `<li class="${selectedItem ? `covered ${selectedItem.status}` : ''}"><span>${selectedItem?.status === 'completed' ? '✓' : selectedItem ? '◐' : '○'}</span><b>${code}</b>${course ? `<small>${escapeHtml(course.title)}</small>` : ''}</li>`;
     }).join('');
-    return `<article class="program-progress-card" role="button" tabindex="0" data-program="${program.slug}" data-kind="${kind}" data-track="${escapeHtml(kind === 'major' ? track?.id || '' : '')}" aria-label="Open personalized requirements for ${escapeHtml(label)}"><div><span class="program-chip">${kind}</span><strong>${escapeHtml(label)}</strong><span class="open-audit">Open audit →</span></div><p><b>${statusCounts.completed} completed</b> · ${statusCounts.current} in progress · ${statusCounts.planned} planned${requiredCount ? ` toward a catalog minimum of ${requiredCount} courses` : ` across ${courses.length} catalog course options`}.</p><div class="mini-progress" aria-label="${coveragePercent}% of course target represented in plan"><span style="width:${coveragePercent}%"></span></div>
+    return `<article class="program-progress-card" role="button" tabindex="0" data-program="${program.slug}" data-kind="${kind}" data-track="${escapeHtml(kind === 'major' ? track?.id || '' : '')}" aria-label="Open personalized requirements for ${escapeHtml(label)}"><div><span class="program-chip">${kind}</span><strong>${escapeHtml(label)}</strong><span class="open-audit">Open audit →</span></div><p class="program-course-total"><b>${target} courses required</b><span>${requiredCount ? 'Catalog minimum' : 'Planning estimate'} · ${courses.length} named catalog options</span></p><p><b>${statusCounts.completed} completed</b> · ${statusCounts.current} in progress · ${statusCounts.planned} planned · ${Math.max(0, target - coveredCount)} not yet planned.</p><div class="mini-progress" aria-label="${coveragePercent}% of course target represented in plan"><span style="width:${coveragePercent}%"></span></div>
       <div class="compact-requirements"><h4>Quick checklist</h4>${checklist.length ? `<ul class="mini-checklist">${checklist.map(item => `<li class="${item.state}"><span>${item.state === 'met' ? '✓' : item.state === 'scheduled' ? '◐' : item.state === 'needed' ? '○' : '?'}</span><b>${escapeHtml(item.rule)}</b></li>`).join('')}</ul>` : '<p class="no-rules">See the complete catalog wording for category and elective rules.</p>'}
       <details><summary>All named courses and options (${courses.length})</summary><ul class="named-course-list">${courseItems || '<li>No specific course codes are named.</li>'}</ul></details></div>
       ${program.catalogOnlyReferences?.length ? `<p class="catalog-only"><b>Catalog-only or legacy references:</b> ${escapeHtml(program.catalogOnlyReferences.join(', '))}. These are not recommended as current courses.</p>` : ''}<small>Course totals are planning coverage, not an official completion decision. Alternatives, grades, residency, and approvals still require advisor review.</small><button class="view-program-button" data-program="${program.slug}">View full requirements</button></article>`;
@@ -829,7 +830,8 @@ function programAuditContext(program, preferredKind, trackId) {
   const pool = kind === 'major' ? track?.courses || [] : program.minorCourses || [];
   const text = kind === 'major' ? track?.text || program.requirementsText : program.minorText || program.requirementsText;
   const requiredCount = kind === 'major' ? track?.requiredCourseCount : program.minorRequiredCourseCount;
-  return { kind, track, pool, text, requiredCount };
+  const courseTarget = programTarget(kind, program, track, programCourseGroups(kind, program, track).length);
+  return { kind, track, pool, text, requiredCount, courseTarget };
 }
 
 function renderProgram(slug, preferredKind, trackId) {
@@ -845,7 +847,7 @@ function renderProgram(slug, preferredKind, trackId) {
   const selectedItems = plan.courses.filter(item => context.pool.includes(item.code)).map(item => ({ ...item, course: data.courses.find(course => course.code === item.code) })).filter(item => item.course);
   const counts = { completed: 0, current: 0, planned: 0 };
   selectedItems.forEach(item => { counts[item.status] += 1; });
-  const remainingCount = context.requiredCount == null ? null : Math.max(0, context.requiredCount - selectedItems.length);
+  const remainingCount = Math.max(0, context.courseTarget - selectedItems.length);
   const rules = requirementHighlights(context.text).map(rule => ({ rule, ...programAuditRule(rule, context.pool) }));
   const ruleList = rules.length ? rules.map(item => `<li class="audit-rule ${item.state}"><span>${item.state === 'met' ? '✓' : item.state === 'scheduled' ? '◐' : item.state === 'needed' ? '○' : '?'}</span><div><b>${escapeHtml(item.rule)}</b><small>${escapeHtml(item.detail)}</small></div></li>`).join('') : '<li class="audit-rule review"><span>?</span><div><b>No machine-readable rule summary was available.</b><small>Use the official wording below and confirm with your advisor.</small></div></li>';
   const checklistOrder = { completed: 0, current: 1, planned: 2, unplanned: 3 };
@@ -859,10 +861,10 @@ function renderProgram(slug, preferredKind, trackId) {
     return { course, state, icon, label };
   }).filter(Boolean).sort((a, b) => checklistOrder[a.state] - checklistOrder[b.state] || a.course.code.localeCompare(b.course.code, undefined, { numeric: true }));
   const checklistHtml = courseChecklist.map(item => `<li class="program-course-item ${item.state}"><span class="course-check-icon">${item.icon}</span><button data-audit-course="${item.course.code}"><b>${item.course.code}</b><span>${escapeHtml(item.course.title)}</span></button><small>${item.label}</small>${item.state === 'unplanned' ? `<button class="audit-add" data-add-code="${item.course.code}">+ Add</button>` : ''}</li>`).join('');
-  const checklistTarget = context.requiredCount || context.pool.length || 1;
+  const checklistTarget = context.courseTarget || context.pool.length || 1;
   const checklistPercent = Math.min(100, Math.round((selectedItems.length / checklistTarget) * 100));
   const title = context.kind === 'major' && context.track?.label !== 'Major' ? `${program.name} — ${context.track.label}` : `${program.name} ${context.kind}`;
-  $('#programDetail').innerHTML = `<div class="audit-heading"><p class="eyebrow">Personalized program audit</p><h2>${escapeHtml(title)}</h2><p><b>${counts.completed} completed</b> · ${counts.current} in progress · ${counts.planned} planned${remainingCount == null ? '' : ` · ${remainingCount} course slot${remainingCount === 1 ? '' : 's'} not yet planned`}</p></div>
+  $('#programDetail').innerHTML = `<div class="audit-heading"><p class="eyebrow">Personalized program audit</p><h2>${escapeHtml(title)}</h2><div class="audit-course-total"><strong>${context.courseTarget}</strong><span>${context.requiredCount ? 'catalog-required courses' : 'estimated required courses'}</span></div><p><b>${counts.completed} completed</b> · ${counts.current} in progress · ${counts.planned} planned · ${remainingCount} course slot${remainingCount === 1 ? '' : 's'} not yet planned</p></div>
     <section class="audit-section"><h3>Requirement checklist</h3><ul class="audit-rules">${ruleList}</ul></section>
     <section class="audit-section program-course-checklist"><div class="course-checklist-heading"><div><h3>Course checklist</h3><p>Every current course named or included by a catalog rule is shown here. Some entries are alternatives, electives, or prerequisite pathways—not classes every student must take.</p></div><b>${checklistPercent}% planned</b></div><div class="mini-progress"><span style="width:${checklistPercent}%"></span></div><div class="checklist-legend"><span class="completed">✓ Completed</span><span class="current">◐ In progress</span><span class="planned">◆ Planned</span><span class="unplanned">□ Not scheduled</span></div><ul>${checklistHtml || '<li class="empty-audit">No current course codes were identified for this program.</li>'}</ul></section>
     <details class="official-requirements"><summary>Read complete catalog wording</summary><pre>${escapeHtml(context.text || 'No dedicated requirements text was published on this catalog page.')}</pre></details><a href="${program.sourceUrl}" target="_blank" rel="noreferrer">Open official requirements ↗</a>`;
