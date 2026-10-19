@@ -53,7 +53,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-4');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-5');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -448,7 +448,10 @@ function renderRecommendedPlan(force = false) {
     return;
   }
   const flexibleCount = recommendedDraft.filter(entry => entry.flexible).length;
-  $('#recommendedMessage').textContent = `${recommendedDraft.length} courses across eight semesters · ${flexibleCount} flexible choices highlighted${recommendedDraft.omittedProgramCount ? ` · ${recommendedDraft.omittedProgramCount} additional program options do not fit this course load` : ''}`;
+  const requestedLoad = Math.max(3, Math.min(5, Number($('#recommendedLoad').value) || 4));
+  const overfilledSavedTerms = SEMESTERS.filter(semester => recommendedDraft.filter(entry => entry.term === semester.id && entry.type === 'existing').length > requestedLoad);
+  const savedCourseNote = overfilledSavedTerms.length ? ` · ${overfilledSavedTerms.map(semester => `${semester.year} ${semester.season}`).join(' and ')} exceeds ${requestedLoad} because all saved My Plan courses are preserved` : '';
+  $('#recommendedMessage').textContent = `${recommendedDraft.length} courses across eight semesters · ${flexibleCount} flexible choices highlighted${recommendedDraft.omittedProgramCount ? ` · ${recommendedDraft.omittedProgramCount} additional program options do not fit this course load` : ''}${savedCourseNote}`;
   $('#applyRecommendedPlan').hidden = false;
   $('#recommendedPlan').innerHTML = SEMESTERS.map(semester => {
     const semesterEntries = recommendedDraft.filter(entry => entry.term === semester.id);
