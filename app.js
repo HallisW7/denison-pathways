@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-9');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-10');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -304,7 +304,8 @@ function programCourseGroups(kind, program, track) {
 function programTarget(kind, program, track, groupCount) {
   const explicit = kind === 'major' ? track?.requiredCourseCount : program.minorRequiredCourseCount;
   const text = kind === 'major' ? track?.text || program.requirementsText : program.minorText || program.requirementsText;
-  const inferred = explicit || inferredProgramCourseCount(text || '');
+  const plausibleExplicit = explicit && explicit >= (kind === 'minor' ? 3 : 4) ? explicit : null;
+  const inferred = plausibleExplicit || inferredProgramCourseCount(text || '');
   if (inferred) return inferred;
   return kind === 'minor' ? Math.min(6, groupCount) : Math.min(16, groupCount);
 }
@@ -593,7 +594,7 @@ function comparisonCourseList(groups, emptyText) {
 function renderMajorComparison() {
   const comparison = compareMajorTracks($('#compareMajorA').value, $('#compareMajorB').value);
   if (!comparison) { $('#majorComparison').innerHTML = '<div class="empty-plan"><strong>Choose two majors to compare.</strong></div>'; return; }
-  $('#majorComparison').innerHTML = `<div class="compare-summary"><article><span>Shared catalog options</span><strong>${comparison.shared.length}</strong></article><article><span>${escapeHtml(comparison.first.label)}</span><strong>${comparison.first.track.courses.length}</strong><small>${comparison.first.target ? `Estimated ${comparison.first.target}-course path` : 'Review catalog rules'}</small></article><article><span>${escapeHtml(comparison.second.label)}</span><strong>${comparison.second.track.courses.length}</strong><small>${comparison.second.target ? `Estimated ${comparison.second.target}-course path` : 'Review catalog rules'}</small></article></div><p class="compare-note">Alternative courses that fulfill the same catalog choice are grouped together. Broad elective pools are options, not courses every student must take.</p><section class="shared-courses"><h3>Courses in both paths</h3>${comparisonCourseList(comparison.sharedGroups, 'No named courses overlap.')}</section><div class="compare-columns"><section><h3>Only in ${escapeHtml(comparison.first.label)}</h3>${comparisonCourseList(comparison.firstOnlyGroups, 'No unique named courses.')}</section><section><h3>Only in ${escapeHtml(comparison.second.label)}</h3>${comparisonCourseList(comparison.secondOnlyGroups, 'No unique named courses.')}</section></div>`;
+  $('#majorComparison').innerHTML = `<div class="compare-summary"><article><span>Shared catalog options</span><strong>${comparison.shared.length}</strong><small>Courses available to both paths</small></article><article><span>${escapeHtml(comparison.first.label)}</span><strong>${comparison.first.target || '—'}</strong><small>Estimated required courses · ${comparison.first.track.courses.length} named catalog options</small></article><article><span>${escapeHtml(comparison.second.label)}</span><strong>${comparison.second.target || '—'}</strong><small>Estimated required courses · ${comparison.second.track.courses.length} named catalog options</small></article></div><p class="compare-note">Required-course totals are planning estimates from catalog rules—not the number of options shown below. Alternative courses that fulfill the same choice are grouped together.</p><section class="shared-courses"><h3>Courses in both paths</h3>${comparisonCourseList(comparison.sharedGroups, 'No named courses overlap.')}</section><div class="compare-columns"><section><h3>Only in ${escapeHtml(comparison.first.label)}</h3>${comparisonCourseList(comparison.firstOnlyGroups, 'No unique named courses.')}</section><section><h3>Only in ${escapeHtml(comparison.second.label)}</h3>${comparisonCourseList(comparison.secondOnlyGroups, 'No unique named courses.')}</section></div>`;
   $$('[data-compare-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.compareCourse)));
 }
 
