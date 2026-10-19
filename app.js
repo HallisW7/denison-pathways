@@ -1,5 +1,6 @@
 let data;
 let visibleLimit = 30;
+let recommendedDraft = [];
 const STORAGE_KEY = 'denisonPathwaysPlanV1';
 let plan = { majors: [], minors: [], courses: [], otherCredits: 0, gpa: '' };
 const SEMESTERS = [
@@ -41,7 +42,7 @@ function normalizePlanShape(value = {}) {
   };
 }
 
-function savePlan() { localStorage.setItem(STORAGE_KEY, JSON.stringify(plan)); }
+function savePlan() { recommendedDraft = []; localStorage.setItem(STORAGE_KEY, JSON.stringify(plan)); }
 
 function normalizeTerm(term) {
   return SEMESTERS.some(semester => semester.id === term) ? term : SEMESTERS[0].id;
@@ -52,7 +53,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261014-2');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-1');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -69,6 +70,7 @@ async function init() {
   renderElectives();
   renderProgram(data.programs.find(program => program.kinds.includes('major'))?.slug || data.programs[0].slug);
   renderPlanner();
+  renderMajorComparison();
 }
 
 function programOptions(kind) {
@@ -89,6 +91,10 @@ function fillFilters() {
   $('#programFilter').innerHTML += allPrograms;
   $('#programSelect').innerHTML = allPrograms;
   $('#plannerMajor').innerHTML = '<option value="">Choose a major and degree</option>' + majorOptions();
+  $('#compareMajorA').innerHTML = majorOptions();
+  $('#compareMajorB').innerHTML = majorOptions();
+  const comparisonOptions = $$('#compareMajorB option');
+  if (comparisonOptions[1]) $('#compareMajorB').value = comparisonOptions[1].value;
   $('#plannerMinorOptions').innerHTML = data.programs.filter(program => program.kinds.includes('minor')).map(program => `<option value="${escapeHtml(program.name)}"></option>`).join('');
   $('#plannerCourseTerm').innerHTML = semesterOptions(SEMESTERS[0].id);
   $('#electiveTerm').innerHTML = semesterOptions(SEMESTERS[0].id);
@@ -254,6 +260,202 @@ function recommendationData() {
 
 function courseCredits(course) {
   return Number.parseFloat(String(course?.credits || '').match(/\d+(?:\.\d+)?/)?.[0]) || 0;
+}
+
+const COUNT_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20 };
+
+function inferredProgramCourseCount(text = '') {
+  const pattern = /(?:total of|minimum of|consists of|requires?)\s+(?:a\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:four-credit\s+)?courses?/gi;
+  const values = [...text.matchAll(pattern)].map(match => Number(match[1]) || COUNT_WORDS[match[1].toLowerCase()]).filter(value => value > 0 && value <= 20);
+  return values.length ? Math.max(...values) : null;
+}
+
+function programCourseGroups(kind, program, track) {
+  const pool = [...new Set(programCourses(kind, program, track))];
+  const text = kind === 'major' ? track?.text || program.requirementsText || '' : program.minorText || program.requirementsText || '';
+  const lowerText = text.toLowerCase();
+  const parent = pool.map((_, index) => index);
+  const find = index => parent[index] === index ? index : (parent[index] = find(parent[index]));
+  const join = (a, b) => { const rootA = find(a), rootB = find(b); if (rootA !== rootB) parent[rootB] = rootA; };
+  const positioned = pool.map((code, index) => ({ code, index, position: lowerText.indexOf(code.toLowerCase()) })).filter(item => item.position >= 0).sort((a, b) => a.position - b.position);
+  for (let index = 1; index < positioned.length; index += 1) {
+    const previous = positioned[index - 1], current = positioned[index];
+    const between = text.slice(previous.position + previous.code.length, current.position);
+    if (between.length < 170 && /\bor\b/i.test(between)) join(previous.index, current.index);
+  }
+  const groups = [];
+  for (let index = 0; index < pool.length; index += 1) {
+    const root = find(index);
+    let group = groups.find(item => item.root === root);
+    if (!group) { group = { root, codes: [] }; groups.push(group); }
+    group.codes.push(pool[index]);
+  }
+  return groups.map(group => group.codes);
+}
+
+function programTarget(kind, program, track, groupCount) {
+  const explicit = kind === 'major' ? track?.requiredCourseCount : program.minorRequiredCourseCount;
+  const text = kind === 'major' ? track?.text || program.requirementsText : program.minorText || program.requirementsText;
+  const inferred = explicit || inferredProgramCourseCount(text || '');
+  if (inferred) return inferred;
+  return kind === 'minor' ? Math.min(6, groupCount) : Math.min(16, groupCount);
+}
+
+function courseLevel(course) {
+  return Math.floor((Number.parseInt(course?.number, 10) || 100) / 100);
+}
+
+function progressCoverageScore(progress) {
+  return progress.reduce((score, requirement) => score + requirement.countMet + (requirement.needsLab ? 0 : requirement.id === 'SCI' && requirement.countMet >= requirement.count ? 0.5 : 0), 0);
+}
+
+function buildRecommendedPlan(load = 4) {
+  const termLoad = Math.max(3, Math.min(5, Number(load) || 4));
+  const targetTotal = termLoad * SEMESTERS.length;
+  const majors = selectedMajors();
+  const minors = selectedMinors();
+  if (!majors.length && !minors.length) return [];
+  const entries = [];
+  const scheduled = new Map();
+  const termCounts = new Map(SEMESTERS.map(semester => [semester.id, 0]));
+  const addEntry = entry => {
+    entries.push(entry);
+    if (entry.course) scheduled.set(entry.course.code, entry.term);
+    termCounts.set(entry.term, (termCounts.get(entry.term) || 0) + 1);
+  };
+  for (const item of selectedCourseRecords()) addEntry({ id: `existing-${item.code}`, course: item.course, term: normalizeTerm(item.term), type: 'existing', flexible: false, reason: item.status === 'completed' ? 'Completed' : item.status === 'current' ? 'In progress' : 'Already in My plan', alternatives: [] });
+  const chooseTerm = (course, preferredIndex) => {
+    const prereqCodes = [...new Set([...(course?.prerequisites || '').matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]))];
+    const prereqIndexes = prereqCodes.map(code => scheduled.has(code) ? SEMESTERS.findIndex(semester => semester.id === scheduled.get(code)) + 1 : 0);
+    let start = Math.max(0, preferredIndex, ...prereqIndexes);
+    for (let index = start; index < SEMESTERS.length; index += 1) if ((termCounts.get(SEMESTERS[index].id) || 0) < termLoad) return SEMESTERS[index].id;
+    const lightest = SEMESTERS.reduce((best, semester) => (termCounts.get(semester.id) || 0) < (termCounts.get(best.id) || 0) ? semester : best, SEMESTERS[0]);
+    return lightest.id;
+  };
+  const candidateMap = new Map();
+  const selections = [
+    ...majors.map(({ program, track }) => ({ kind: 'major', program, track, label: track.label === 'Major' ? program.name : `${program.name} — ${track.label}` })),
+    ...minors.map(program => ({ kind: 'minor', program, track: null, label: `${program.name} minor` }))
+  ];
+  for (const selection of selections) {
+    const groups = programCourseGroups(selection.kind, selection.program, selection.track);
+    const target = programTarget(selection.kind, selection.program, selection.track, groups.length);
+    const chosenGroups = groups.slice(0, Math.min(target, groups.length));
+    for (const alternatives of chosenGroups) {
+      const representative = alternatives.find(code => scheduled.has(code)) || alternatives.find(code => data.courses.some(course => course.code === code));
+      if (!representative) continue;
+      const candidate = candidateMap.get(representative) || { code: representative, alternatives: [], labels: [], flexible: alternatives.length > 1 };
+      candidate.alternatives = [...new Set([...candidate.alternatives, ...alternatives])];
+      candidate.labels.push(selection.label);
+      candidateMap.set(representative, candidate);
+    }
+    const missingSlots = Math.max(0, target - chosenGroups.length);
+    if (missingSlots) {
+      const poolSubjects = programCourses(selection.kind, selection.program, selection.track).map(code => code.split(' ')[0]);
+      const primarySubject = [...new Set(poolSubjects)].sort((a, b) => poolSubjects.filter(item => item === b).length - poolSubjects.filter(item => item === a).length)[0];
+      const supplements = data.courses.filter(course => course.subject === primarySubject && courseLevel(course) >= 3 && !candidateMap.has(course.code) && !scheduled.has(course.code)).slice(0, missingSlots);
+      for (const course of supplements) candidateMap.set(course.code, { code: course.code, alternatives: supplements.map(item => item.code), labels: [`${selection.label} elective`], flexible: true });
+    }
+  }
+  const allProgramCandidates = [...candidateMap.values()].filter(candidate => !scheduled.has(candidate.code)).map(candidate => ({ ...candidate, course: data.courses.find(course => course.code === candidate.code) })).filter(candidate => candidate.course);
+  const programCapacity = Math.max(0, targetTotal - entries.length - 4);
+  const programCandidates = allProgramCandidates.sort((a, b) => b.labels.length - a.labels.length || Number(/capstone|assessment|experiential/i.test(b.course.title)) - Number(/capstone|assessment|experiential/i.test(a.course.title)) || courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10)).slice(0, programCapacity).sort((a, b) => courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10));
+  const omittedProgramCount = Math.max(0, allProgramCandidates.length - programCandidates.length);
+  for (const candidate of programCandidates) {
+    const capstone = /capstone|assessment|experiential/i.test(candidate.course.title);
+    const preferred = capstone ? 6 : Math.max(0, Math.min(6, (Math.max(1, courseLevel(candidate.course)) - 1) * 2));
+    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
+  }
+  let plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
+  let guard = 0;
+  while (entries.length < targetTotal && geProgressFor(plannedRecords).some(requirement => !requirement.complete) && guard < 18) {
+    guard += 1;
+    const baseProgress = geProgressFor(plannedRecords);
+    const baseById = new Map(baseProgress.map(requirement => [requirement.id, requirement]));
+    const before = progressCoverageScore(baseProgress);
+    const used = new Set(entries.filter(entry => entry.course).map(entry => entry.course.code));
+    const options = data.courses.filter(course => !used.has(course.code) && courseCredits(course) >= 3 && courseLevel(course) <= 3).map(course => {
+      const trialProgress = geProgressFor([...plannedRecords, { course }]);
+      const gained = trialProgress.filter(requirement => requirement.countMet > (baseById.get(requirement.id)?.countMet || 0) || (requirement.id === 'SCI' && !requirement.needsLab && baseById.get('SCI')?.needsLab)).map(requirement => requirement.label);
+      return { course, improvement: progressCoverageScore(trialProgress) - before, gained };
+    }).filter(option => option.improvement > 0).sort((a, b) => b.improvement - a.improvement || Boolean(a.course.prerequisites) - Boolean(b.course.prerequisites) || a.course.code.localeCompare(b.course.code, undefined, { numeric: true }));
+    if (!options.length) break;
+    const selected = options[0];
+    const tagIds = selected.course.ge.map(tag => tag.id);
+    const alternatives = data.courses.filter(course => !used.has(course.code) && course.code !== selected.course.code && courseCredits(course) >= 3 && course.ge.some(tag => tagIds.includes(tag.id))).slice(0, 10);
+    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, Math.min(5, guard - 1)), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
+    plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
+  }
+  const usedSubjects = new Set(entries.filter(entry => entry.course).map(entry => entry.course.subject));
+  const electivePool = data.courses.filter(course => !scheduled.has(course.code) && !entries.some(entry => entry.course?.code === course.code) && courseCredits(course) >= 3 && courseLevel(course) <= 2 && !course.prerequisites).sort((a, b) => Number(usedSubjects.has(a.subject)) - Number(usedSubjects.has(b.subject)) || b.ge.length - a.ge.length || a.course?.code?.localeCompare?.(b.course?.code || '', undefined, { numeric: true }) || a.code.localeCompare(b.code, undefined, { numeric: true }));
+  let electiveIndex = 0;
+  while (entries.length < targetTotal && electiveIndex < electivePool.length) {
+    const course = electivePool[electiveIndex++];
+    if (entries.some(entry => entry.course?.code === course.code)) continue;
+    const alternatives = electivePool.filter(option => option.code !== course.code && !entries.some(entry => entry.course?.code === option.code)).slice(0, 10);
+    addEntry({ id: `elective-${entries.length}-${course.code}`, course, term: chooseTerm(course, entries.length < targetTotal / 2 ? 0 : 2), type: 'elective', flexible: true, reason: 'Open elective / graduation credit', alternatives: [course, ...alternatives] });
+    usedSubjects.add(course.subject);
+  }
+  entries.omittedProgramCount = omittedProgramCount;
+  return entries.sort((a, b) => SEMESTERS.findIndex(semester => semester.id === a.term) - SEMESTERS.findIndex(semester => semester.id === b.term));
+}
+
+function recommendedStatus(entry) {
+  if (entry.type === 'existing') return 'existing';
+  return entry.flexible ? 'flexible' : 'program';
+}
+
+function renderRecommendedPlan(force = false) {
+  const programs = [...selectedMajors().map(({ program, track }) => track.label === 'Major' ? program.name : `${program.name} — ${track.label}`), ...selectedMinors().map(program => `${program.name} minor`)];
+  $('#recommendedPrograms').textContent = programs.join(' · ') || 'Choose a major or minor in My plan first.';
+  if (force || !recommendedDraft.length) recommendedDraft = buildRecommendedPlan($('#recommendedLoad').value);
+  if (!recommendedDraft.length) {
+    $('#recommendedPlan').innerHTML = '<div class="empty-plan"><strong>No program selected yet.</strong><span>Add at least one major or minor under My plan, then build a recommendation.</span></div>';
+    $('#recommendedMessage').textContent = '';
+    $('#applyRecommendedPlan').hidden = true;
+    return;
+  }
+  const flexibleCount = recommendedDraft.filter(entry => entry.flexible).length;
+  $('#recommendedMessage').textContent = `${recommendedDraft.length} courses across eight semesters · ${flexibleCount} flexible choices highlighted${recommendedDraft.omittedProgramCount ? ` · ${recommendedDraft.omittedProgramCount} additional program options do not fit this course load` : ''}`;
+  $('#applyRecommendedPlan').hidden = false;
+  $('#recommendedPlan').innerHTML = SEMESTERS.map(semester => {
+    const semesterEntries = recommendedDraft.filter(entry => entry.term === semester.id);
+    return `<article class="recommended-term"><header><div><span>${semester.year}</span><h3>${semester.season}</h3></div><b>${semesterEntries.length} classes</b></header><div>${semesterEntries.map(entry => `<div class="recommended-course ${recommendedStatus(entry)}"><div class="recommended-course-title"><span>${entry.flexible ? '↻' : entry.type === 'existing' ? '✓' : '◆'}</span><button data-recommended-course="${entry.course.code}"><b>${entry.course.code}</b><small>${escapeHtml(entry.course.title)}</small></button></div><p>${escapeHtml(entry.reason)}</p>${entry.flexible && entry.alternatives.length > 1 ? `<label>Swap choice<select data-swap-recommended="${escapeHtml(entry.id)}">${entry.alternatives.map(course => `<option value="${course.code}" ${course.code === entry.course.code ? 'selected' : ''}>${course.code} · ${escapeHtml(course.title)}</option>`).join('')}</select></label>` : ''}</div>`).join('')}</div></article>`;
+  }).join('');
+  $$('[data-recommended-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.recommendedCourse)));
+  $$('[data-swap-recommended]').forEach(select => select.addEventListener('change', () => {
+    const attemptedCode = select.value;
+    const entry = recommendedDraft.find(item => item.id === select.dataset.swapRecommended);
+    const replacement = data.courses.find(course => course.code === attemptedCode);
+    if (entry && replacement && !recommendedDraft.some(item => item !== entry && item.course?.code === replacement.code)) { entry.course = replacement; renderRecommendedPlan(false); }
+    else { select.value = entry?.course?.code || ''; $('#recommendedMessage').textContent = `${attemptedCode} is already elsewhere in this draft.`; }
+  }));
+}
+
+function majorSelection(id) {
+  const program = data.programs.find(item => item.slug === String(id).split('::')[0]);
+  const track = program?.majorTracks?.find(item => item.id === id);
+  return program && track ? { program, track, label: track.label === 'Major' ? program.name : `${program.name} — ${track.label}` } : null;
+}
+
+function compareMajorTracks(firstId, secondId) {
+  const first = majorSelection(firstId), second = majorSelection(secondId);
+  if (!first || !second) return null;
+  const firstCodes = [...new Set(first.track.courses)], secondCodes = [...new Set(second.track.courses)];
+  const sharedCodes = firstCodes.filter(code => secondCodes.includes(code));
+  const toCourses = codes => codes.map(code => data.courses.find(course => course.code === code)).filter(Boolean);
+  return { first: { ...first, target: programTarget('major', first.program, first.track, programCourseGroups('major', first.program, first.track).length) }, second: { ...second, target: programTarget('major', second.program, second.track, programCourseGroups('major', second.program, second.track).length) }, shared: toCourses(sharedCodes), firstOnly: toCourses(firstCodes.filter(code => !sharedCodes.includes(code))), secondOnly: toCourses(secondCodes.filter(code => !sharedCodes.includes(code))) };
+}
+
+function comparisonCourseList(courses, emptyText) {
+  return courses.length ? `<ul>${courses.map(course => `<li><button data-compare-course="${course.code}"><b>${course.code}</b><span>${escapeHtml(course.title)}</span></button></li>`).join('')}</ul>` : `<p class="compare-empty">${emptyText}</p>`;
+}
+
+function renderMajorComparison() {
+  const comparison = compareMajorTracks($('#compareMajorA').value, $('#compareMajorB').value);
+  if (!comparison) { $('#majorComparison').innerHTML = '<div class="empty-plan"><strong>Choose two majors to compare.</strong></div>'; return; }
+  $('#majorComparison').innerHTML = `<div class="compare-summary"><article><span>Shared catalog options</span><strong>${comparison.shared.length}</strong></article><article><span>${escapeHtml(comparison.first.label)}</span><strong>${comparison.first.track.courses.length}</strong><small>${comparison.first.target ? `Estimated ${comparison.first.target}-course path` : 'Review catalog rules'}</small></article><article><span>${escapeHtml(comparison.second.label)}</span><strong>${comparison.second.track.courses.length}</strong><small>${comparison.second.target ? `Estimated ${comparison.second.target}-course path` : 'Review catalog rules'}</small></article></div><p class="compare-note">Lists show courses named or included by catalog rules. “Or” choices and broad elective pools are options, not courses every student must take.</p><section class="shared-courses"><h3>Courses in both paths</h3>${comparisonCourseList(comparison.shared, 'No named courses overlap.')}</section><div class="compare-columns"><section><h3>Only in ${escapeHtml(comparison.first.label)}</h3>${comparisonCourseList(comparison.firstOnly, 'No unique named courses.')}</section><section><h3>Only in ${escapeHtml(comparison.second.label)}</h3>${comparisonCourseList(comparison.secondOnly, 'No unique named courses.')}</section></div>`;
+  $$('[data-compare-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.compareCourse)));
 }
 
 function renderPlanner() {
@@ -600,7 +802,12 @@ function feedbackIssueUrl(type, message) {
 }
 
 function bindEvents() {
-  $$('.tab').forEach(tab => tab.addEventListener('click', () => { switchView(tab.dataset.view); if (tab.dataset.view === 'electives') renderElectives(); }));
+  $$('.tab').forEach(tab => tab.addEventListener('click', () => {
+    switchView(tab.dataset.view);
+    if (tab.dataset.view === 'electives') renderElectives();
+    if (tab.dataset.view === 'recommended') renderRecommendedPlan(false);
+    if (tab.dataset.view === 'compare') renderMajorComparison();
+  }));
   $$('.tabs').forEach(tablist => tablist.addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const tabs = $$('.tab');
@@ -615,6 +822,18 @@ function bindEvents() {
   $('#clearFilters').addEventListener('click', () => { $('#globalSearch').value = ''; $('#geFilter').value = ''; $('#programFilter').value = ''; $('#explicitOnly').checked = false; visibleLimit = 30; renderCourses(); });
   $('#showMore').addEventListener('click', () => { visibleLimit += 30; renderCourses(); });
   ['electiveTerm', 'electiveSubject', 'electiveLevel', 'electiveReady'].forEach(id => $('#' + id).addEventListener('change', renderElectives));
+  $('#generateRecommendedPlan').addEventListener('click', () => renderRecommendedPlan(true));
+  $('#recommendedLoad').addEventListener('change', () => renderRecommendedPlan(true));
+  $('#applyRecommendedPlan').addEventListener('click', () => {
+    const additions = recommendedDraft.filter(entry => entry.course && !plan.courses.some(item => item.code === entry.course.code)).map(entry => ({ code: entry.course.code, status: 'planned', term: entry.term }));
+    plan.courses.push(...additions);
+    savePlan();
+    $('#plannerEntryMessage').textContent = `${additions.length} recommended course${additions.length === 1 ? '' : 's'} added to your plan.`;
+    renderPlanner();
+    switchView('planner');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  ['compareMajorA', 'compareMajorB'].forEach(id => $('#' + id).addEventListener('change', renderMajorComparison));
   const addMajor = () => {
     const id = $('#plannerMajor').value;
     if (!id) return;
@@ -674,6 +893,10 @@ if (typeof module !== 'undefined' && module.exports) {
     courseCredits,
     programAuditRule,
     electiveData,
+    inferredProgramCourseCount,
+    programCourseGroups,
+    buildRecommendedPlan,
+    compareMajorTracks,
     divisionAssignment,
     requirementHighlights,
     feedbackIssueUrl,

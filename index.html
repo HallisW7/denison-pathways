@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,650&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261014-2">
+  <link rel="stylesheet" href="styles.css?v=20261019-1">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to main content</a>
@@ -40,6 +40,8 @@
 
     <nav class="tabs" aria-label="Explorer views" role="tablist">
       <button class="tab active" role="tab" aria-selected="true" aria-controls="plannerView" data-view="planner">My plan</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="recommendedView" data-view="recommended">Recommended plan</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="compareView" data-view="compare">Compare majors</button>
       <button class="tab" role="tab" aria-selected="false" aria-controls="coursesView" data-view="courses">Courses</button>
       <button class="tab" role="tab" aria-selected="false" aria-controls="programsView" data-view="programs">Majors & minors</button>
       <button class="tab" role="tab" aria-selected="false" aria-controls="geView" data-view="ge">General education</button>
@@ -106,6 +108,29 @@
           <div id="recommendations" class="recommendations"></div>
         </section>
       </div>
+    </section>
+
+    <section id="recommendedView" class="view" role="tabpanel">
+      <div class="feature-intro"><p class="eyebrow">A suggested path—not a locked schedule</p><h2>Your recommended four-year plan</h2><p>Build an eight-semester draft from the majors, minors, and completed classes in My plan. Program courses are prioritized around their listed prerequisites; gold cards are flexible GE or graduation-credit choices that can be swapped.</p></div>
+      <div class="recommended-controls">
+        <div><strong>Programs used</strong><p id="recommendedPrograms">Choose a major or minor in My plan first.</p></div>
+        <label>Classes per semester<select id="recommendedLoad"><option value="4" selected>4 classes</option><option value="3">3 classes</option><option value="5">5 classes</option></select></label>
+        <button id="generateRecommendedPlan" class="primary-button" type="button">Build recommended plan</button>
+      </div>
+      <div id="recommendedMessage" class="recommended-message" aria-live="polite"></div>
+      <div class="plan-legend" aria-label="Recommended plan legend"><span class="program">Program path</span><span class="flexible">Flexible requirement</span><span class="existing">Already in your plan</span></div>
+      <div id="recommendedPlan" class="recommended-plan"></div>
+      <div class="recommended-actions"><button id="applyRecommendedPlan" class="primary-button" type="button" hidden>Add this draft to My plan</button><small>Course availability, placement, substitutions, and special approvals still need advisor confirmation.</small></div>
+    </section>
+
+    <section id="compareView" class="view" role="tabpanel">
+      <div class="feature-intro"><p class="eyebrow">See the difference before declaring</p><h2>Compare two majors</h2><p>Compare the courses named by each major and degree track. Shared courses reveal overlap; the two unique lists show how the academic paths differ.</p></div>
+      <div class="compare-controls">
+        <label>First major or degree<select id="compareMajorA"></select></label>
+        <span aria-hidden="true">versus</span>
+        <label>Second major or degree<select id="compareMajorB"></select></label>
+      </div>
+      <div id="majorComparison" class="major-comparison" aria-live="polite"></div>
     </section>
 
     <section id="coursesView" class="view" role="tabpanel">
@@ -186,6 +211,6 @@
   </dialog>
 
   <footer>Built from Denison University’s official 2026–2027 Academic Catalog. <span id="retrievedDate"></span></footer>
-  <script src="app.js?v=20261014-2"></script>
+  <script src="app.js?v=20261019-1"></script>
 </body>
 </html>
