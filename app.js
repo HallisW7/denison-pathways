@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-7');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-8');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -332,6 +332,7 @@ function buildRecommendedPlan(load = 4, options = {}) {
   const scheduled = new Map();
   const termCounts = new Map(SEMESTERS.map(semester => [semester.id, 0]));
   const flexibleCounts = new Map(SEMESTERS.map(semester => [semester.id, 0]));
+  const firstTwoYearTermIds = new Set(SEMESTERS.slice(0, 4).map(semester => semester.id));
   const addEntry = entry => {
     entries.push(entry);
     if (entry.course) scheduled.set(entry.course.code, entry.term);
@@ -348,6 +349,18 @@ function buildRecommendedPlan(load = 4, options = {}) {
     if (placement.reserveFlexible) {
       const withFlexibleRoom = available.filter(item => item.count < termLoad - 1);
       if (withFlexibleRoom.length) available = withFlexibleRoom;
+    }
+    if (placement.reserveEarlyExploration) {
+      const earlyProgramRoom = available.filter(item => {
+        if (!firstTwoYearTermIds.has(item.semester.id)) return true;
+        const explorationReserve = item.index < 3 ? Math.min(2, Math.max(1, termLoad - 2)) : 1;
+        return item.count < termLoad - explorationReserve;
+      });
+      if (earlyProgramRoom.length) available = earlyProgramRoom;
+    }
+    if (placement.prioritizeFirstTwoYears) {
+      const early = available.filter(item => firstTwoYearTermIds.has(item.semester.id));
+      if (early.length) available = early;
     }
     if (placement.favorStudyAbroad && studyAbroadTerm && (flexibleCounts.get(studyAbroadTerm) || 0) < 2) {
       const abroad = available.find(item => item.semester.id === studyAbroadTerm);
@@ -403,10 +416,10 @@ function buildRecommendedPlan(load = 4, options = {}) {
   const omittedProgramCount = Math.max(0, allProgramCandidates.length - programCandidates.length);
   programCandidates.forEach((candidate, index) => {
     const capstone = /capstone|assessment|experiential/i.test(candidate.course.title);
-    const levelFloor = Math.max(0, Math.min(6, (Math.max(1, courseLevel(candidate.course)) - 1) * 2));
+    const levelFloor = Math.max(0, Math.min(5, (Math.max(1, courseLevel(candidate.course)) - 1) * 2));
     const distributed = Math.min(7, Math.floor(index * SEMESTERS.length / Math.max(1, programCandidates.length)));
     const preferred = capstone ? 6 : Math.max(levelFloor, distributed);
-    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred, { avoidStudyAbroad: true, reserveFlexible: !candidate.flexible, spreadFlexible: candidate.flexible }), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
+    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred, { avoidStudyAbroad: true, reserveFlexible: !candidate.flexible, reserveEarlyExploration: true, spreadFlexible: candidate.flexible }), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
   });
   let plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
   let guard = 0;
@@ -416,16 +429,17 @@ function buildRecommendedPlan(load = 4, options = {}) {
     const baseById = new Map(baseProgress.map(requirement => [requirement.id, requirement]));
     const before = progressCoverageScore(baseProgress);
     const used = new Set(entries.filter(entry => entry.course).map(entry => entry.course.code));
+    const subjectUseCounts = entries.filter(entry => entry.course).reduce((counts, entry) => counts.set(entry.course.subject, (counts.get(entry.course.subject) || 0) + 1), new Map());
     const options = data.courses.filter(course => !used.has(course.code) && courseCredits(course) >= 3 && courseLevel(course) <= 3).map(course => {
       const trialProgress = geProgressFor([...plannedRecords, { course }]);
       const gained = trialProgress.filter(requirement => requirement.countMet > (baseById.get(requirement.id)?.countMet || 0) || (requirement.id === 'SCI' && !requirement.needsLab && baseById.get('SCI')?.needsLab)).map(requirement => requirement.label);
       return { course, improvement: progressCoverageScore(trialProgress) - before, gained };
-    }).filter(option => option.improvement > 0).sort((a, b) => b.improvement - a.improvement || Boolean(a.course.prerequisites) - Boolean(b.course.prerequisites) || a.course.code.localeCompare(b.course.code, undefined, { numeric: true }));
+    }).filter(option => option.improvement > 0).sort((a, b) => b.improvement - a.improvement || (subjectUseCounts.get(a.course.subject) || 0) - (subjectUseCounts.get(b.course.subject) || 0) || Boolean(a.course.prerequisites) - Boolean(b.course.prerequisites) || courseLevel(a.course) - courseLevel(b.course) || a.course.code.localeCompare(b.course.code, undefined, { numeric: true }));
     if (!options.length) break;
     const selected = options[0];
     const tagIds = selected.course.ge.map(tag => tag.id);
     const alternatives = data.courses.filter(course => !used.has(course.code) && course.code !== selected.course.code && courseCredits(course) >= 3 && course.ge.some(tag => tagIds.includes(tag.id))).slice(0, 10);
-    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, Math.min(5, guard - 1), { favorStudyAbroad: true, spreadFlexible: true }), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
+    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, (guard - 1) % 4, { favorStudyAbroad: true, prioritizeFirstTwoYears: true, spreadFlexible: true }), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
     plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
   }
   const usedSubjects = new Set(entries.filter(entry => entry.course).map(entry => entry.course.subject));
@@ -442,6 +456,31 @@ function buildRecommendedPlan(load = 4, options = {}) {
     const alternatives = electivePool.filter(option => option.code !== course.code && !entries.some(entry => entry.course?.code === option.code)).slice(0, 10);
     addEntry({ id: `elective-${entries.length}-${course.code}`, course, term: nextOpenTerm(), type: 'elective', flexible: true, reason: 'Open elective / graduation credit', alternatives: [course, ...alternatives] });
     usedSubjects.add(course.subject);
+  }
+  // A dense program can temporarily push an advanced course into an early gap.
+  // Swap that course with a later flexible requirement so exploration stays in
+  // the first two years and advanced work remains appropriately sequenced.
+  const semesterIndex = term => SEMESTERS.findIndex(semester => semester.id === term);
+  const swapTerms = (first, second) => {
+    const firstTerm = first.term;
+    first.term = second.term;
+    second.term = firstTerm;
+    scheduled.set(first.course.code, first.term);
+    scheduled.set(second.course.code, second.term);
+  };
+  const lateFlexibleEntries = () => entries.filter(entry => entry.flexible && entry.type !== 'program-flexible' && semesterIndex(entry.term) >= 4 && (!studyAbroadTerm || entry.term !== studyAbroadTerm)).sort((a, b) => semesterIndex(a.term) - semesterIndex(b.term));
+  const advancedEarly = entries.filter(entry => entry.course && entry.type !== 'existing' && semesterIndex(entry.term) < 4 && (courseLevel(entry.course) >= 4 || /capstone|assessment|experiential/i.test(entry.course.title)));
+  for (const advanced of advancedEarly) {
+    const prerequisites = listedPrerequisiteCodes(advanced.course);
+    const scheduledPrerequisites = entries.filter(entry => prerequisites.includes(entry.course?.code)).sort((a, b) => semesterIndex(b.term) - semesterIndex(a.term));
+    for (const prerequisite of scheduledPrerequisites) {
+      const earlierFlexible = lateFlexibleEntries().find(entry => semesterIndex(entry.term) < semesterIndex(prerequisite.term));
+      if (earlierFlexible) swapTerms(prerequisite, earlierFlexible);
+    }
+    const latestPrerequisiteIndex = Math.max(-1, ...scheduledPrerequisites.map(entry => semesterIndex(entry.term)));
+    const laterFlexible = lateFlexibleEntries().find(entry => semesterIndex(entry.term) > latestPrerequisiteIndex);
+    if (!laterFlexible) continue;
+    swapTerms(advanced, laterFlexible);
   }
   entries.omittedProgramCount = omittedProgramCount;
   return entries.sort((a, b) => SEMESTERS.findIndex(semester => semester.id === a.term) - SEMESTERS.findIndex(semester => semester.id === b.term));
