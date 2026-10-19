@@ -53,7 +53,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-2');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-3');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -840,6 +840,12 @@ function bindEvents() {
   $('#showMore').addEventListener('click', () => { visibleLimit += 30; renderCourses(); });
   ['electiveTerm', 'electiveSubject', 'electiveLevel', 'electiveReady'].forEach(id => $('#' + id).addEventListener('change', renderElectives));
   $('#generateRecommendedPlan').addEventListener('click', () => renderRecommendedPlan(true));
+  $('#resetRecommendedPlan').addEventListener('click', () => {
+    $('#recommendedLoad').value = '4';
+    recommendedDraft = [];
+    renderRecommendedPlan(true);
+    if (recommendedDraft.length) $('#recommendedMessage').textContent += ' · reset to the default four-course plan and original flexible choices';
+  });
   $('#recommendedLoad').addEventListener('change', () => renderRecommendedPlan(true));
   $('#applyRecommendedPlan').addEventListener('click', () => {
     const additions = recommendedDraft.filter(entry => entry.course && !plan.courses.some(item => item.code === entry.course.code)).map(entry => ({ code: entry.course.code, status: 'planned', term: entry.term }));

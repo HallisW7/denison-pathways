@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,650&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261019-2">
+  <link rel="stylesheet" href="styles.css?v=20261019-3">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to main content</a>
@@ -115,7 +115,10 @@
       <div class="recommended-controls">
         <div><strong>Programs used</strong><p id="recommendedPrograms">Choose a major or minor in My plan first.</p></div>
         <label>Classes per semester<select id="recommendedLoad"><option value="4" selected>4 classes</option><option value="3">3 classes</option><option value="5">5 classes</option></select></label>
-        <button id="generateRecommendedPlan" class="primary-button" type="button">Build recommended plan</button>
+        <div class="recommended-control-actions">
+          <button id="generateRecommendedPlan" class="primary-button" type="button">Build recommended plan</button>
+          <button id="resetRecommendedPlan" class="secondary-button" type="button">Reset recommendation</button>
+        </div>
       </div>
       <div id="recommendedMessage" class="recommended-message" aria-live="polite"></div>
       <div class="plan-legend" aria-label="Recommended plan legend"><span class="program">Program path</span><span class="flexible">Flexible requirement</span><span class="existing">Already in your plan</span></div>
@@ -211,6 +214,6 @@
   </dialog>
 
   <footer>Built from Denison University’s official 2026–2027 Academic Catalog. <span id="retrievedDate"></span></footer>
-  <script src="app.js?v=20261019-2"></script>
+  <script src="app.js?v=20261019-3"></script>
 </body>
 </html>
