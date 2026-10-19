@@ -53,7 +53,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-3');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-4');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -313,9 +313,10 @@ function listedPrerequisiteCodes(course) {
   return [...new Set([...(course?.prerequisites || '').matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]))];
 }
 
-function buildRecommendedPlan(load = 4) {
+function buildRecommendedPlan(load = 4, options = {}) {
   const termLoad = Math.max(3, Math.min(5, Number(load) || 4));
   const targetTotal = termLoad * SEMESTERS.length;
+  const studyAbroadTerm = SEMESTERS.some(semester => semester.id === options.studyAbroadTerm) ? options.studyAbroadTerm : '';
   const majors = selectedMajors();
   const minors = selectedMinors();
   if (!majors.length && !minors.length) return [];
@@ -328,11 +329,19 @@ function buildRecommendedPlan(load = 4) {
     termCounts.set(entry.term, (termCounts.get(entry.term) || 0) + 1);
   };
   for (const item of selectedCourseRecords()) addEntry({ id: `existing-${item.code}`, course: item.course, term: normalizeTerm(item.term), type: 'existing', flexible: false, reason: item.status === 'completed' ? 'Completed' : item.status === 'current' ? 'In progress' : 'Already in My plan', alternatives: [] });
-  const chooseTerm = (course, preferredIndex) => {
+  const chooseTerm = (course, preferredIndex, placement = {}) => {
     const prereqCodes = listedPrerequisiteCodes(course);
     const prereqIndexes = prereqCodes.map(code => scheduled.has(code) ? SEMESTERS.findIndex(semester => semester.id === scheduled.get(code)) + 1 : 0);
     let start = Math.max(0, preferredIndex, ...prereqIndexes);
-    for (let index = start; index < SEMESTERS.length; index += 1) if ((termCounts.get(SEMESTERS[index].id) || 0) < termLoad) return SEMESTERS[index].id;
+    let available = SEMESTERS.map((semester, index) => ({ semester, index, count: termCounts.get(semester.id) || 0 })).filter(item => item.index >= start && item.count < termLoad);
+    if (placement.avoidStudyAbroad && studyAbroadTerm && available.some(item => item.semester.id !== studyAbroadTerm)) available = available.filter(item => item.semester.id !== studyAbroadTerm);
+    if (placement.favorStudyAbroad && studyAbroadTerm) {
+      const abroad = available.find(item => item.semester.id === studyAbroadTerm);
+      if (abroad) return abroad.semester.id;
+    }
+    const near = available.filter(item => item.index <= Math.min(SEMESTERS.length - 1, start + 1));
+    const choices = near.length ? near : available;
+    if (choices.length) return choices.sort((a, b) => a.count - b.count || a.index - b.index)[0].semester.id;
     const lightest = SEMESTERS.reduce((best, semester) => (termCounts.get(semester.id) || 0) < (termCounts.get(best.id) || 0) ? semester : best, SEMESTERS[0]);
     return lightest.id;
   };
@@ -376,13 +385,15 @@ function buildRecommendedPlan(load = 4) {
     return prerequisiteCourse ? { ...candidate, code: prerequisiteCode, course: prerequisiteCourse } : candidate;
   });
   const programCapacity = Math.max(0, targetTotal - entries.length - 4);
-  const programCandidates = allProgramCandidates.sort((a, b) => b.labels.length - a.labels.length || Number(/capstone|assessment|experiential/i.test(b.course.title)) - Number(/capstone|assessment|experiential/i.test(a.course.title)) || courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10)).slice(0, programCapacity).sort((a, b) => courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10));
+  const programCandidates = allProgramCandidates.sort((a, b) => b.labels.length - a.labels.length || Number(/capstone|assessment|experiential/i.test(b.course.title)) - Number(/capstone|assessment|experiential/i.test(a.course.title)) || courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10)).slice(0, programCapacity).sort((a, b) => Number(/capstone|assessment|experiential/i.test(a.course.title)) - Number(/capstone|assessment|experiential/i.test(b.course.title)) || courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10));
   const omittedProgramCount = Math.max(0, allProgramCandidates.length - programCandidates.length);
-  for (const candidate of programCandidates) {
+  programCandidates.forEach((candidate, index) => {
     const capstone = /capstone|assessment|experiential/i.test(candidate.course.title);
-    const preferred = capstone ? 6 : Math.max(0, Math.min(6, (Math.max(1, courseLevel(candidate.course)) - 1) * 2));
-    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
-  }
+    const levelFloor = Math.max(0, Math.min(6, (Math.max(1, courseLevel(candidate.course)) - 1) * 2));
+    const distributed = Math.min(7, Math.floor(index * SEMESTERS.length / Math.max(1, programCandidates.length)));
+    const preferred = capstone ? 6 : Math.max(levelFloor, distributed);
+    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred, { avoidStudyAbroad: true }), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
+  });
   let plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
   let guard = 0;
   while (entries.length < targetTotal && geProgressFor(plannedRecords).some(requirement => !requirement.complete) && guard < 18) {
@@ -400,17 +411,21 @@ function buildRecommendedPlan(load = 4) {
     const selected = options[0];
     const tagIds = selected.course.ge.map(tag => tag.id);
     const alternatives = data.courses.filter(course => !used.has(course.code) && course.code !== selected.course.code && courseCredits(course) >= 3 && course.ge.some(tag => tagIds.includes(tag.id))).slice(0, 10);
-    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, Math.min(5, guard - 1)), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
+    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, Math.min(5, guard - 1), { favorStudyAbroad: true }), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
     plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
   }
   const usedSubjects = new Set(entries.filter(entry => entry.course).map(entry => entry.course.subject));
   const electivePool = data.courses.filter(course => !scheduled.has(course.code) && !entries.some(entry => entry.course?.code === course.code) && courseCredits(course) >= 3 && courseLevel(course) <= 2 && !course.prerequisites).sort((a, b) => Number(usedSubjects.has(a.subject)) - Number(usedSubjects.has(b.subject)) || b.ge.length - a.ge.length || a.course?.code?.localeCompare?.(b.course?.code || '', undefined, { numeric: true }) || a.code.localeCompare(b.code, undefined, { numeric: true }));
   let electiveIndex = 0;
-  while (entries.length < targetTotal && electiveIndex < electivePool.length) {
+  const nextOpenTerm = () => {
+    if (studyAbroadTerm && (termCounts.get(studyAbroadTerm) || 0) < termLoad) return studyAbroadTerm;
+    return SEMESTERS.find(semester => (termCounts.get(semester.id) || 0) < termLoad)?.id || '';
+  };
+  while (nextOpenTerm() && electiveIndex < electivePool.length) {
     const course = electivePool[electiveIndex++];
     if (entries.some(entry => entry.course?.code === course.code)) continue;
     const alternatives = electivePool.filter(option => option.code !== course.code && !entries.some(entry => entry.course?.code === option.code)).slice(0, 10);
-    addEntry({ id: `elective-${entries.length}-${course.code}`, course, term: chooseTerm(course, entries.length < targetTotal / 2 ? 0 : 2), type: 'elective', flexible: true, reason: 'Open elective / graduation credit', alternatives: [course, ...alternatives] });
+    addEntry({ id: `elective-${entries.length}-${course.code}`, course, term: nextOpenTerm(), type: 'elective', flexible: true, reason: 'Open elective / graduation credit', alternatives: [course, ...alternatives] });
     usedSubjects.add(course.subject);
   }
   entries.omittedProgramCount = omittedProgramCount;
@@ -425,7 +440,7 @@ function recommendedStatus(entry) {
 function renderRecommendedPlan(force = false) {
   const programs = [...selectedMajors().map(({ program, track }) => track.label === 'Major' ? program.name : `${program.name} — ${track.label}`), ...selectedMinors().map(program => `${program.name} minor`)];
   $('#recommendedPrograms').textContent = programs.join(' · ') || 'Choose a major or minor in My plan first.';
-  if (force || !recommendedDraft.length) recommendedDraft = buildRecommendedPlan($('#recommendedLoad').value);
+  if (force || !recommendedDraft.length) recommendedDraft = buildRecommendedPlan($('#recommendedLoad').value, { studyAbroadTerm: $('#studyAbroadTerm').value });
   if (!recommendedDraft.length) {
     $('#recommendedPlan').innerHTML = '<div class="empty-plan"><strong>No program selected yet.</strong><span>Add at least one major or minor under My plan, then build a recommendation.</span></div>';
     $('#recommendedMessage').textContent = '';
@@ -437,7 +452,8 @@ function renderRecommendedPlan(force = false) {
   $('#applyRecommendedPlan').hidden = false;
   $('#recommendedPlan').innerHTML = SEMESTERS.map(semester => {
     const semesterEntries = recommendedDraft.filter(entry => entry.term === semester.id);
-    return `<article class="recommended-term"><header><div><span>${semester.year}</span><h3>${semester.season}</h3></div><b>${semesterEntries.length} classes</b></header><div>${semesterEntries.map(entry => `<div class="recommended-course ${recommendedStatus(entry)}"><div class="recommended-course-title"><span>${entry.flexible ? '↻' : entry.type === 'existing' ? '✓' : '◆'}</span><button data-recommended-course="${entry.course.code}"><b>${entry.course.code}</b><small>${escapeHtml(entry.course.title)}</small></button></div><p>${escapeHtml(entry.reason)}</p>${entry.flexible && entry.alternatives.length > 1 ? `<label>Swap choice<select data-swap-recommended="${escapeHtml(entry.id)}">${entry.alternatives.map(course => `<option value="${course.code}" ${course.code === entry.course.code ? 'selected' : ''}>${course.code} · ${escapeHtml(course.title)}</option>`).join('')}</select></label>` : ''}</div>`).join('')}</div></article>`;
+    const isStudyAbroad = semester.id === $('#studyAbroadTerm').value;
+    return `<article class="recommended-term ${isStudyAbroad ? 'study-abroad' : ''}"><header><div><span>${semester.year}</span><h3>${semester.season}</h3></div><b>${isStudyAbroad ? 'Study abroad · ' : ''}${semesterEntries.length} classes</b></header>${isStudyAbroad ? '<aside class="study-abroad-note"><strong>Good fits abroad</strong><span>Approved language, humanities, fine arts, interdivisional, GE, and open-elective equivalents. Confirm transfer and major/minor approval before enrolling.</span></aside>' : ''}<div>${semesterEntries.map(entry => `<div class="recommended-course ${recommendedStatus(entry)}"><div class="recommended-course-title"><span>${entry.flexible ? '↻' : entry.type === 'existing' ? '✓' : '◆'}</span><button data-recommended-course="${entry.course.code}"><b>${entry.course.code}</b><small>${escapeHtml(entry.course.title)}</small></button></div><p>${escapeHtml(isStudyAbroad && entry.flexible ? `Study abroad option · ${entry.reason}` : entry.reason)}</p>${entry.flexible && entry.alternatives.length > 1 ? `<label>Swap choice<select data-swap-recommended="${escapeHtml(entry.id)}">${entry.alternatives.map(course => `<option value="${course.code}" ${course.code === entry.course.code ? 'selected' : ''}>${course.code} · ${escapeHtml(course.title)}</option>`).join('')}</select></label>` : ''}</div>`).join('')}</div></article>`;
   }).join('');
   $$('[data-recommended-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.recommendedCourse)));
   $$('[data-swap-recommended]').forEach(select => select.addEventListener('change', () => {
@@ -842,11 +858,13 @@ function bindEvents() {
   $('#generateRecommendedPlan').addEventListener('click', () => renderRecommendedPlan(true));
   $('#resetRecommendedPlan').addEventListener('click', () => {
     $('#recommendedLoad').value = '4';
+    $('#studyAbroadTerm').value = '';
     recommendedDraft = [];
     renderRecommendedPlan(true);
     if (recommendedDraft.length) $('#recommendedMessage').textContent += ' · reset to the default four-course plan and original flexible choices';
   });
   $('#recommendedLoad').addEventListener('change', () => renderRecommendedPlan(true));
+  $('#studyAbroadTerm').addEventListener('change', () => renderRecommendedPlan(true));
   $('#applyRecommendedPlan').addEventListener('click', () => {
     const additions = recommendedDraft.filter(entry => entry.course && !plan.courses.some(item => item.code === entry.course.code)).map(entry => ({ code: entry.course.code, status: 'planned', term: entry.term }));
     plan.courses.push(...additions);
