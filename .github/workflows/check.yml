@@ -1,0 +1,16 @@
+name: Validate planner
+on:
+  push:
+  pull_request:
+jobs:
+  planner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check app.js
+      - run: node --test tests/planner.test.js
+      - run: python3 scripts/audit-catalog.py
+      - run: git diff --exit-code -- data/denison-2026-2027.json
