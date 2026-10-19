@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-6');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-7');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -331,10 +331,12 @@ function buildRecommendedPlan(load = 4, options = {}) {
   const entries = [];
   const scheduled = new Map();
   const termCounts = new Map(SEMESTERS.map(semester => [semester.id, 0]));
+  const flexibleCounts = new Map(SEMESTERS.map(semester => [semester.id, 0]));
   const addEntry = entry => {
     entries.push(entry);
     if (entry.course) scheduled.set(entry.course.code, entry.term);
     termCounts.set(entry.term, (termCounts.get(entry.term) || 0) + 1);
+    if (entry.flexible) flexibleCounts.set(entry.term, (flexibleCounts.get(entry.term) || 0) + 1);
   };
   for (const item of selectedCourseRecords()) addEntry({ id: `existing-${item.code}`, course: item.course, term: normalizeTerm(item.term), type: 'existing', flexible: false, reason: item.status === 'completed' ? 'Completed' : item.status === 'current' ? 'In progress' : 'Already in My plan', alternatives: [] });
   const chooseTerm = (course, preferredIndex, placement = {}) => {
@@ -343,13 +345,17 @@ function buildRecommendedPlan(load = 4, options = {}) {
     let start = Math.max(0, preferredIndex, ...prereqIndexes);
     let available = SEMESTERS.map((semester, index) => ({ semester, index, count: termCounts.get(semester.id) || 0 })).filter(item => item.index >= start && item.count < termLoad);
     if (placement.avoidStudyAbroad && studyAbroadTerm && available.some(item => item.semester.id !== studyAbroadTerm)) available = available.filter(item => item.semester.id !== studyAbroadTerm);
-    if (placement.favorStudyAbroad && studyAbroadTerm) {
+    if (placement.reserveFlexible) {
+      const withFlexibleRoom = available.filter(item => item.count < termLoad - 1);
+      if (withFlexibleRoom.length) available = withFlexibleRoom;
+    }
+    if (placement.favorStudyAbroad && studyAbroadTerm && (flexibleCounts.get(studyAbroadTerm) || 0) < 2) {
       const abroad = available.find(item => item.semester.id === studyAbroadTerm);
       if (abroad) return abroad.semester.id;
     }
     const near = available.filter(item => item.index <= Math.min(SEMESTERS.length - 1, start + 1));
-    const choices = near.length ? near : available;
-    if (choices.length) return choices.sort((a, b) => a.count - b.count || a.index - b.index)[0].semester.id;
+    const choices = placement.spreadFlexible ? available : near.length ? near : available;
+    if (choices.length) return choices.sort((a, b) => placement.spreadFlexible ? (flexibleCounts.get(a.semester.id) || 0) - (flexibleCounts.get(b.semester.id) || 0) || Math.abs(a.index - preferredIndex) - Math.abs(b.index - preferredIndex) || a.count - b.count || a.index - b.index : a.count - b.count || a.index - b.index)[0].semester.id;
     const lightest = SEMESTERS.reduce((best, semester) => (termCounts.get(semester.id) || 0) < (termCounts.get(best.id) || 0) ? semester : best, SEMESTERS[0]);
     return lightest.id;
   };
@@ -400,7 +406,7 @@ function buildRecommendedPlan(load = 4, options = {}) {
     const levelFloor = Math.max(0, Math.min(6, (Math.max(1, courseLevel(candidate.course)) - 1) * 2));
     const distributed = Math.min(7, Math.floor(index * SEMESTERS.length / Math.max(1, programCandidates.length)));
     const preferred = capstone ? 6 : Math.max(levelFloor, distributed);
-    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred, { avoidStudyAbroad: true }), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
+    addEntry({ id: `program-${candidate.course.code}`, course: candidate.course, term: chooseTerm(candidate.course, preferred, { avoidStudyAbroad: true, reserveFlexible: !candidate.flexible, spreadFlexible: candidate.flexible }), type: candidate.flexible ? 'program-flexible' : 'program', flexible: candidate.flexible, reason: candidate.labels.join(' + '), alternatives: candidate.alternatives.map(code => data.courses.find(course => course.code === code)).filter(Boolean) });
   });
   let plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
   let guard = 0;
@@ -419,15 +425,16 @@ function buildRecommendedPlan(load = 4, options = {}) {
     const selected = options[0];
     const tagIds = selected.course.ge.map(tag => tag.id);
     const alternatives = data.courses.filter(course => !used.has(course.code) && course.code !== selected.course.code && courseCredits(course) >= 3 && course.ge.some(tag => tagIds.includes(tag.id))).slice(0, 10);
-    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, Math.min(5, guard - 1), { favorStudyAbroad: true }), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
+    addEntry({ id: `ge-${guard}-${selected.course.code}`, course: selected.course, term: chooseTerm(selected.course, Math.min(5, guard - 1), { favorStudyAbroad: true, spreadFlexible: true }), type: 'ge', flexible: true, reason: selected.gained.join(' + ') || 'General education', alternatives: [selected.course, ...alternatives] });
     plannedRecords = entries.filter(entry => entry.course).map(entry => ({ course: entry.course }));
   }
   const usedSubjects = new Set(entries.filter(entry => entry.course).map(entry => entry.course.subject));
   const electivePool = data.courses.filter(course => !scheduled.has(course.code) && !entries.some(entry => entry.course?.code === course.code) && courseCredits(course) >= 3 && courseLevel(course) <= 2 && !course.prerequisites).sort((a, b) => Number(usedSubjects.has(a.subject)) - Number(usedSubjects.has(b.subject)) || b.ge.length - a.ge.length || a.course?.code?.localeCompare?.(b.course?.code || '', undefined, { numeric: true }) || a.code.localeCompare(b.code, undefined, { numeric: true }));
   let electiveIndex = 0;
   const nextOpenTerm = () => {
-    if (studyAbroadTerm && (termCounts.get(studyAbroadTerm) || 0) < termLoad) return studyAbroadTerm;
-    return SEMESTERS.find(semester => (termCounts.get(semester.id) || 0) < termLoad)?.id || '';
+    if (studyAbroadTerm && (termCounts.get(studyAbroadTerm) || 0) < termLoad && (flexibleCounts.get(studyAbroadTerm) || 0) < 2) return studyAbroadTerm;
+    const open = SEMESTERS.filter(semester => (termCounts.get(semester.id) || 0) < termLoad);
+    return open.sort((a, b) => (flexibleCounts.get(a.id) || 0) - (flexibleCounts.get(b.id) || 0) || (termCounts.get(a.id) || 0) - (termCounts.get(b.id) || 0) || SEMESTERS.indexOf(a) - SEMESTERS.indexOf(b))[0]?.id || '';
   };
   while (nextOpenTerm() && electiveIndex < electivePool.length) {
     const course = electivePool[electiveIndex++];
@@ -442,6 +449,7 @@ function buildRecommendedPlan(load = 4, options = {}) {
 
 function recommendedStatus(entry) {
   if (entry.type === 'existing') return 'existing';
+  if (entry.type === 'program-flexible') return 'program';
   return entry.flexible ? 'flexible' : 'program';
 }
 
@@ -456,8 +464,8 @@ function renderStudyAbroadRecommendations() {
   const region = $('#studyAbroadRegion').value || 'any approved destination';
   const draft = recommendedDraft.length ? recommendedDraft : buildRecommendedPlan($('#recommendedLoad').value, { studyAbroadTerm: term });
   const termEntries = draft.filter(entry => entry.term === term && entry.course);
-  const flexible = termEntries.filter(entry => entry.flexible);
-  const fixed = termEntries.filter(entry => !entry.flexible);
+  const flexible = termEntries.filter(entry => entry.flexible && entry.type !== 'program-flexible');
+  const fixed = termEntries.filter(entry => !entry.flexible || entry.type === 'program-flexible');
   const courseList = entries => entries.length ? `<ul>${entries.map(entry => `<li><button type="button" data-abroad-course="${entry.course.code}"><b>${entry.course.code}</b><span>${escapeHtml(entry.course.title)}</span></button></li>`).join('')}</ul>` : '<p class="compare-empty">No matching course is currently in this draft.</p>';
   $('#studyAbroadRecommendations').innerHTML = `<div class="study-abroad-choice-summary"><span>${semester.year} · ${semester.season}</span><strong>${escapeHtml(region)}</strong><small>${escapeHtml(guidance.label)}</small></div><section><h3>Good requirements to target</h3><div class="study-abroad-targets">${guidance.targets.map(target => `<span>${escapeHtml(target)}</span>`).join('')}</div></section><div class="study-abroad-course-columns"><section><h3>Flexible draft courses to match abroad</h3><p>Look for approved equivalents that can replace these flexible choices.</p>${courseList(flexible)}</section><section><h3>Program courses to review carefully</h3><p>Keep these at Denison unless the department approves a replacement.</p>${courseList(fixed)}</section></div>`;
   $$('[data-abroad-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.abroadCourse)));
@@ -479,7 +487,7 @@ function renderRecommendedPlan(force = false) {
     $('#applyRecommendedPlan').hidden = true;
     return;
   }
-  const flexibleCount = recommendedDraft.filter(entry => entry.flexible).length;
+  const flexibleCount = recommendedDraft.filter(entry => entry.flexible && entry.type !== 'program-flexible').length;
   const requestedLoad = Math.max(3, Math.min(5, Number($('#recommendedLoad').value) || 4));
   const overfilledSavedTerms = SEMESTERS.filter(semester => recommendedDraft.filter(entry => entry.term === semester.id && entry.type === 'existing').length > requestedLoad);
   const savedCourseNote = overfilledSavedTerms.length ? ` · ${overfilledSavedTerms.map(semester => `${semester.year} ${semester.season}`).join(' and ')} exceeds ${requestedLoad} because all saved My Plan courses are preserved` : '';
