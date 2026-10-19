@@ -53,7 +53,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-1');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-2');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -309,6 +309,10 @@ function progressCoverageScore(progress) {
   return progress.reduce((score, requirement) => score + requirement.countMet + (requirement.needsLab ? 0 : requirement.id === 'SCI' && requirement.countMet >= requirement.count ? 0.5 : 0), 0);
 }
 
+function listedPrerequisiteCodes(course) {
+  return [...new Set([...(course?.prerequisites || '').matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]))];
+}
+
 function buildRecommendedPlan(load = 4) {
   const termLoad = Math.max(3, Math.min(5, Number(load) || 4));
   const targetTotal = termLoad * SEMESTERS.length;
@@ -325,7 +329,7 @@ function buildRecommendedPlan(load = 4) {
   };
   for (const item of selectedCourseRecords()) addEntry({ id: `existing-${item.code}`, course: item.course, term: normalizeTerm(item.term), type: 'existing', flexible: false, reason: item.status === 'completed' ? 'Completed' : item.status === 'current' ? 'In progress' : 'Already in My plan', alternatives: [] });
   const chooseTerm = (course, preferredIndex) => {
-    const prereqCodes = [...new Set([...(course?.prerequisites || '').matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]))];
+    const prereqCodes = listedPrerequisiteCodes(course);
     const prereqIndexes = prereqCodes.map(code => scheduled.has(code) ? SEMESTERS.findIndex(semester => semester.id === scheduled.get(code)) + 1 : 0);
     let start = Math.max(0, preferredIndex, ...prereqIndexes);
     for (let index = start; index < SEMESTERS.length; index += 1) if ((termCounts.get(SEMESTERS[index].id) || 0) < termLoad) return SEMESTERS[index].id;
@@ -357,7 +361,20 @@ function buildRecommendedPlan(load = 4) {
       for (const course of supplements) candidateMap.set(course.code, { code: course.code, alternatives: supplements.map(item => item.code), labels: [`${selection.label} elective`], flexible: true });
     }
   }
-  const allProgramCandidates = [...candidateMap.values()].filter(candidate => !scheduled.has(candidate.code)).map(candidate => ({ ...candidate, course: data.courses.find(course => course.code === candidate.code) })).filter(candidate => candidate.course);
+  const rawProgramCandidates = [...candidateMap.values()].filter(candidate => !scheduled.has(candidate.code)).map(candidate => ({ ...candidate, course: data.courses.find(course => course.code === candidate.code) })).filter(candidate => candidate.course);
+  // When a flexible pathway contains the listed prerequisite for another required
+  // course, recommend that prerequisite instead of an easier alternative. This
+  // keeps plans such as MATH 135 -> MATH 145 sequential while still allowing the
+  // student to swap the flexible choice when placement makes that appropriate.
+  const fixedProgramCandidates = rawProgramCandidates.filter(candidate => !candidate.flexible);
+  const fixedProgramCodes = new Set(fixedProgramCandidates.map(candidate => candidate.code));
+  const prerequisiteDemand = new Set(fixedProgramCandidates.flatMap(candidate => listedPrerequisiteCodes(candidate.course)));
+  const allProgramCandidates = rawProgramCandidates.map(candidate => {
+    if (!candidate.flexible) return candidate;
+    const prerequisiteCode = candidate.alternatives.findLast(code => prerequisiteDemand.has(code) && !fixedProgramCodes.has(code));
+    const prerequisiteCourse = prerequisiteCode && data.courses.find(course => course.code === prerequisiteCode);
+    return prerequisiteCourse ? { ...candidate, code: prerequisiteCode, course: prerequisiteCourse } : candidate;
+  });
   const programCapacity = Math.max(0, targetTotal - entries.length - 4);
   const programCandidates = allProgramCandidates.sort((a, b) => b.labels.length - a.labels.length || Number(/capstone|assessment|experiential/i.test(b.course.title)) - Number(/capstone|assessment|experiential/i.test(a.course.title)) || courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10)).slice(0, programCapacity).sort((a, b) => courseLevel(a.course) - courseLevel(b.course) || Number.parseInt(a.course.number, 10) - Number.parseInt(b.course.number, 10));
   const omittedProgramCount = Math.max(0, allProgramCandidates.length - programCandidates.length);
