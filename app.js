@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-8');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-9');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -561,17 +561,39 @@ function compareMajorTracks(firstId, secondId) {
   const firstCodes = [...new Set(first.track.courses)], secondCodes = [...new Set(second.track.courses)];
   const sharedCodes = firstCodes.filter(code => secondCodes.includes(code));
   const toCourses = codes => codes.map(code => data.courses.find(course => course.code === code)).filter(Boolean);
-  return { first: { ...first, target: programTarget('major', first.program, first.track, programCourseGroups('major', first.program, first.track).length) }, second: { ...second, target: programTarget('major', second.program, second.track, programCourseGroups('major', second.program, second.track).length) }, shared: toCourses(sharedCodes), firstOnly: toCourses(firstCodes.filter(code => !sharedCodes.includes(code))), secondOnly: toCourses(secondCodes.filter(code => !sharedCodes.includes(code))) };
+  const firstGroups = programCourseGroups('major', first.program, first.track), secondGroups = programCourseGroups('major', second.program, second.track);
+  const displayGroups = (groups, visibleCodes, includeAlternatives = false) => {
+    const visible = new Set(visibleCodes);
+    return groups.filter(group => group.some(code => visible.has(code))).map(group => {
+      const codes = includeAlternatives ? group : group.filter(code => visible.has(code));
+      return { courses: toCourses(codes), sharedCodes: codes.filter(code => sharedCodes.includes(code)) };
+    }).filter(group => group.courses.length);
+  };
+  const firstOnlyCodes = firstCodes.filter(code => !sharedCodes.includes(code)), secondOnlyCodes = secondCodes.filter(code => !sharedCodes.includes(code));
+  return {
+    first: { ...first, target: programTarget('major', first.program, first.track, firstGroups.length) },
+    second: { ...second, target: programTarget('major', second.program, second.track, secondGroups.length) },
+    shared: toCourses(sharedCodes),
+    firstOnly: toCourses(firstOnlyCodes),
+    secondOnly: toCourses(secondOnlyCodes),
+    sharedGroups: displayGroups(firstGroups, sharedCodes),
+    firstOnlyGroups: displayGroups(firstGroups, firstOnlyCodes, true),
+    secondOnlyGroups: displayGroups(secondGroups, secondOnlyCodes, true)
+  };
 }
 
-function comparisonCourseList(courses, emptyText) {
-  return courses.length ? `<ul>${courses.map(course => `<li><button data-compare-course="${course.code}"><b>${course.code}</b><span>${escapeHtml(course.title)}</span></button></li>`).join('')}</ul>` : `<p class="compare-empty">${emptyText}</p>`;
+function comparisonCourseList(groups, emptyText) {
+  if (!groups.length) return `<p class="compare-empty">${emptyText}</p>`;
+  return `<ul>${groups.map(group => {
+    const alternatives = group.courses.length > 1;
+    return `<li class="${alternatives ? 'compare-option-group' : ''}">${alternatives ? '<strong>Choose one option</strong><small>These courses fulfill the same catalog choice.</small>' : ''}<div>${group.courses.map(course => `<button data-compare-course="${course.code}"><b>${course.code}</b><span>${escapeHtml(course.title)}</span>${group.sharedCodes.includes(course.code) ? '<em>Also shared by both paths</em>' : ''}</button>`).join('')}</div></li>`;
+  }).join('')}</ul>`;
 }
 
 function renderMajorComparison() {
   const comparison = compareMajorTracks($('#compareMajorA').value, $('#compareMajorB').value);
   if (!comparison) { $('#majorComparison').innerHTML = '<div class="empty-plan"><strong>Choose two majors to compare.</strong></div>'; return; }
-  $('#majorComparison').innerHTML = `<div class="compare-summary"><article><span>Shared catalog options</span><strong>${comparison.shared.length}</strong></article><article><span>${escapeHtml(comparison.first.label)}</span><strong>${comparison.first.track.courses.length}</strong><small>${comparison.first.target ? `Estimated ${comparison.first.target}-course path` : 'Review catalog rules'}</small></article><article><span>${escapeHtml(comparison.second.label)}</span><strong>${comparison.second.track.courses.length}</strong><small>${comparison.second.target ? `Estimated ${comparison.second.target}-course path` : 'Review catalog rules'}</small></article></div><p class="compare-note">Lists show courses named or included by catalog rules. “Or” choices and broad elective pools are options, not courses every student must take.</p><section class="shared-courses"><h3>Courses in both paths</h3>${comparisonCourseList(comparison.shared, 'No named courses overlap.')}</section><div class="compare-columns"><section><h3>Only in ${escapeHtml(comparison.first.label)}</h3>${comparisonCourseList(comparison.firstOnly, 'No unique named courses.')}</section><section><h3>Only in ${escapeHtml(comparison.second.label)}</h3>${comparisonCourseList(comparison.secondOnly, 'No unique named courses.')}</section></div>`;
+  $('#majorComparison').innerHTML = `<div class="compare-summary"><article><span>Shared catalog options</span><strong>${comparison.shared.length}</strong></article><article><span>${escapeHtml(comparison.first.label)}</span><strong>${comparison.first.track.courses.length}</strong><small>${comparison.first.target ? `Estimated ${comparison.first.target}-course path` : 'Review catalog rules'}</small></article><article><span>${escapeHtml(comparison.second.label)}</span><strong>${comparison.second.track.courses.length}</strong><small>${comparison.second.target ? `Estimated ${comparison.second.target}-course path` : 'Review catalog rules'}</small></article></div><p class="compare-note">Alternative courses that fulfill the same catalog choice are grouped together. Broad elective pools are options, not courses every student must take.</p><section class="shared-courses"><h3>Courses in both paths</h3>${comparisonCourseList(comparison.sharedGroups, 'No named courses overlap.')}</section><div class="compare-columns"><section><h3>Only in ${escapeHtml(comparison.first.label)}</h3>${comparisonCourseList(comparison.firstOnlyGroups, 'No unique named courses.')}</section><section><h3>Only in ${escapeHtml(comparison.second.label)}</h3>${comparisonCourseList(comparison.secondOnlyGroups, 'No unique named courses.')}</section></div>`;
   $$('[data-compare-course]').forEach(button => button.addEventListener('click', () => openCourse(button.dataset.compareCourse)));
 }
 
