@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,650&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261019-12">
+  <link rel="stylesheet" href="styles.css?v=20261020-1">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to main content</a>
@@ -140,6 +140,9 @@
     <section id="coursesView" class="view" role="tabpanel">
       <aside class="filters">
         <div class="filter-head"><h2>Filter courses</h2><button id="clearFilters">Clear</button></div>
+        <label for="courseSearch">Search courses
+          <input id="courseSearch" type="search" placeholder="Course code, title, subject, or keyword" autocomplete="off">
+        </label>
         <label>GE or competency
           <select id="geFilter"><option value="">All requirements</option></select>
         </label>
@@ -233,6 +236,6 @@
   </dialog>
 
   <footer>Built from Denison University’s official 2026–2027 Academic Catalog. <span id="retrievedDate"></span></footer>
-  <script src="app.js?v=20261019-12"></script>
+  <script src="app.js?v=20261020-1"></script>
 </body>
 </html>

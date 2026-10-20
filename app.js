@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-12');
+  const response = await fetch('data/denison-2026-2027.json?v=20261020-1');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -758,6 +758,7 @@ function bindPlannerResultEvents() {
   });
   $$('.progress-card').forEach(card => card.addEventListener('click', () => {
     $('#globalSearch').value = '';
+    $('#courseSearch').value = '';
     $('#geFilter').value = card.dataset.geId;
     $('#programFilter').value = '';
     $('#explicitOnly').checked = false;
@@ -775,7 +776,7 @@ function bindPlannerResultEvents() {
 }
 
 function filteredCourses() {
-  const query = $('#globalSearch').value.trim().toLowerCase(), ge = $('#geFilter').value, program = $('#programFilter').value, explicit = $('#explicitOnly').checked;
+  const query = ($('#courseSearch').value || $('#globalSearch').value).trim().toLowerCase(), ge = $('#geFilter').value, program = $('#programFilter').value, explicit = $('#explicitOnly').checked;
   return data.courses.filter(course => {
     const haystack = `${course.code} ${course.title} ${course.description} ${course.subjectName}`.toLowerCase();
     const queryMatch = !query || haystack.includes(query) || course.programReferences.some(reference => `${reference.program} ${reference.section}`.toLowerCase().includes(query));
@@ -979,9 +980,11 @@ function bindEvents() {
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
     tabs[next].focus(); tabs[next].click();
   }));
-  ['globalSearch', 'geFilter', 'programFilter', 'explicitOnly'].forEach(id => $('#' + id).addEventListener(id === 'globalSearch' ? 'input' : 'change', () => { visibleLimit = 30; renderCourses(); if (id === 'globalSearch' && $('#globalSearch').value.trim()) switchView('courses'); }));
+  $('#globalSearch').addEventListener('input', () => { $('#courseSearch').value = $('#globalSearch').value; visibleLimit = 30; renderCourses(); if ($('#globalSearch').value.trim()) switchView('courses'); });
+  $('#courseSearch').addEventListener('input', () => { $('#globalSearch').value = $('#courseSearch').value; visibleLimit = 30; renderCourses(); });
+  ['geFilter', 'programFilter', 'explicitOnly'].forEach(id => $('#' + id).addEventListener('change', () => { visibleLimit = 30; renderCourses(); }));
   $('#programSelect').addEventListener('change', event => renderProgram(event.target.value));
-  $('#clearFilters').addEventListener('click', () => { $('#globalSearch').value = ''; $('#geFilter').value = ''; $('#programFilter').value = ''; $('#explicitOnly').checked = false; visibleLimit = 30; renderCourses(); });
+  $('#clearFilters').addEventListener('click', () => { $('#globalSearch').value = ''; $('#courseSearch').value = ''; $('#geFilter').value = ''; $('#programFilter').value = ''; $('#explicitOnly').checked = false; visibleLimit = 30; renderCourses(); });
   $('#showMore').addEventListener('click', () => { visibleLimit += 30; renderCourses(); });
   ['electiveTerm', 'electiveSubject', 'electiveLevel', 'electiveReady'].forEach(id => $('#' + id).addEventListener('change', renderElectives));
   $('#generateRecommendedPlan').addEventListener('click', () => renderRecommendedPlan(true));
