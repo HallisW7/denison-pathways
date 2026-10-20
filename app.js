@@ -61,7 +61,7 @@ function semesterOptions(selected) {
 }
 
 async function init() {
-  const response = await fetch('data/denison-2026-2027.json?v=20261019-11');
+  const response = await fetch('data/denison-2026-2027.json?v=20261019-12');
   data = await response.json();
   loadPlan();
   $('#courseCount').textContent = data.stats.courses.toLocaleString();
@@ -233,14 +233,34 @@ function prerequisiteStatus(course, targetTerm) {
   return { state: met ? 'met' : 'missing', missing: codes.filter(code => !available.has(code)), codes };
 }
 
+function supersededPrerequisiteCodes() {
+  const courseByCode = new Map(data.courses.map(course => [course.code, course]));
+  const superseded = new Set();
+  const pending = plan.courses
+    .filter(item => ['completed', 'current'].includes(item.status))
+    .map(item => item.code);
+  const visited = new Set(pending);
+  while (pending.length) {
+    const course = courseByCode.get(pending.pop());
+    if (!course?.prerequisites) continue;
+    const prerequisites = [...new Set([...course.prerequisites.matchAll(/\b[A-Z]{2,6}\s+\d{3}[A-Z]?\b/g)].map(match => match[0]))];
+    prerequisites.forEach(code => {
+      superseded.add(code);
+      if (!visited.has(code)) { visited.add(code); pending.push(code); }
+    });
+  }
+  return superseded;
+}
+
 function recommendationData() {
   const selectedCodes = new Set(plan.courses.map(item => item.code));
+  const supersededCodes = supersededPrerequisiteCodes();
   const progress = geProgress();
   const unmet = new Set(progress.filter(requirement => !requirement.planComplete).map(requirement => requirement.id));
   if (progress.some(requirement => requirement.needsLab)) unmet.add('LAB');
   const majors = selectedMajors();
   const minors = selectedMinors();
-  return data.courses.filter(course => !selectedCodes.has(course.code)).map(course => {
+  return data.courses.filter(course => !selectedCodes.has(course.code) && !supersededCodes.has(course.code)).map(course => {
     const reasons = [];
     let score = 0;
     for (const { program, track } of majors) {
@@ -1049,6 +1069,7 @@ if (typeof module !== 'undefined' && module.exports) {
     geProgress,
     recommendationData,
     prerequisiteStatus,
+    supersededPrerequisiteCodes,
     courseCredits,
     programAuditRule,
     electiveData,
